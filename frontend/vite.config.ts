@@ -9,6 +9,7 @@ export default defineConfig({
     // Forward API calls to the FastAPI dev server during development.
     proxy: {
       '/health': 'http://127.0.0.1:8000',
+      '/chat': 'http://127.0.0.1:8000',
     },
   },
 })
