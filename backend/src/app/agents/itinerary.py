@@ -30,9 +30,6 @@ Quy tắc khác:
 def itinerary(state: TravelState) -> dict:
     """Build a day-by-day itinerary from the parsed trip request."""
     trip_request = TripRequest.model_validate(state.get("trip_request") or {})
-    if not trip_request.needs_itinerary:
-        return {}
-
     try:
         plan = invoke_structured(
             get_llm(),

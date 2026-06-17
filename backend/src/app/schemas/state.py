@@ -1,6 +1,6 @@
 from enum import StrEnum
 from operator import add
-from typing import Annotated, Any, TypedDict
+from typing import Annotated, Any, Literal, TypedDict
 
 from langgraph.graph.message import AnyMessage, add_messages
 
@@ -19,6 +19,9 @@ type TripRequestState = dict[str, Any]
 type ItineraryState = dict[str, Any]
 type RecommendationState = dict[str, Any]
 type CostReportState = dict[str, Any]
+
+# Agent node names the supervisor may schedule this turn. Drives _next_step routing.
+type AgentStep = Literal["itinerary", "recommendation", "cost"]
 
 
 class InputState(TypedDict):
@@ -54,3 +57,9 @@ class TravelState(InputState, OutputState, total=False):
     """
 
     trip_request: TripRequestState
+
+    # Supervisor routing: ordered agents to run this turn + a cursor. _next_step
+    # dispatches by plan[step_index]; an empty plan (off-topic chat, or a
+    # supervisor failure) routes straight to synthesize.
+    plan: list[AgentStep]
+    step_index: int

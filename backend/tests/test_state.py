@@ -15,6 +15,8 @@ def test_travel_state_has_all_keys() -> None:
         "cost_report",
         "final_answer",
         "trip_request",
+        "plan",
+        "step_index",
         "errors",
     }
 

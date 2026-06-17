@@ -37,9 +37,6 @@ Quy tắc:
 def cost(state: TravelState) -> dict:
     """Estimate per-person costs by aggregating itinerary and recommendation costs."""
     trip_request = TripRequest.model_validate(state.get("trip_request") or {})
-    if not trip_request.needs_cost_estimation:
-        return {}
-
     context = {
         "trip_request": trip_request.model_dump(),
         "itinerary": state.get("itinerary") or {},

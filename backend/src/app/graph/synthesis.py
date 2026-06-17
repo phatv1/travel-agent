@@ -24,11 +24,33 @@ _SUPERVISOR_FAILED_MESSAGE = (
     "số ngày và số người để mình lên kế hoạch chi tiết hơn nhé."
 )
 
+_DIRECT_PROMPT = """\
+Bạn là trợ lý tư vấn du lịch.
+Trả lời trực tiếp, thân thiện bằng tiếng Việt cho tin nhắn không cần lập kế hoạch
+(chào hỏi, hỏi chung, cảm ơn, trò chuyện). Ngắn gọn, tự nhiên. Nếu user có vẻ muốn
+lên kế hoạch thì gợi ý họ nêu rõ điểm đến, số ngày và số người.
+"""
+
+
+def _direct_answer(state: TravelState) -> str:
+    # Supervisor scheduled no agents (off-topic / general chat): answer directly.
+    messages = state.get("messages") or []
+    user_message = messages[-1] if messages else HumanMessage(content="")
+    content = get_llm().invoke([SystemMessage(_DIRECT_PROMPT), user_message]).content
+    return content if isinstance(content, str) else str(content)
+
 
 def synthesize(state: TravelState) -> dict:
-    """Compose the final natural-language answer from the structured agent outputs."""
+    """Compose the final answer.
+
+    Three cases: supervisor failure (apology), no agents scheduled (direct reply),
+    or a travel summary aggregated from agent outputs.
+    """
     if not state.get("trip_request"):
         return {"final_answer": _SUPERVISOR_FAILED_MESSAGE}
+
+    if not any(state.get(k) for k in ("itinerary", "recommendations", "cost_report")):
+        return {"final_answer": _direct_answer(state)}
 
     context = {
         "trip_request": state.get("trip_request") or {},

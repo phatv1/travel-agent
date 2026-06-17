@@ -32,9 +32,6 @@ Quy tắc khác:
 def recommendation(state: TravelState) -> dict:
     """Suggest hotels and restaurants from the parsed trip request."""
     trip_request = TripRequest.model_validate(state.get("trip_request") or {})
-    if not trip_request.needs_recommendations:
-        return {}
-
     try:
         plan = invoke_structured(
             get_llm(),
