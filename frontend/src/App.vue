@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
+import { marked } from 'marked'
+import DOMPurify from 'dompurify'
 
 interface ChatResponse {
   final_answer: string
@@ -12,6 +14,10 @@ const message = ref('')
 const answer = ref('')
 const loading = ref(false)
 const error = ref('')
+
+const renderedAnswer = computed(() =>
+  answer.value ? DOMPurify.sanitize(marked.parse(answer.value, { async: false })) : ''
+)
 
 async function send() {
   if (!message.value.trim() || loading.value) return
@@ -69,8 +75,10 @@ async function send() {
       {{ error }}
     </p>
 
-    <section v-if="answer" class="whitespace-pre-wrap rounded-lg bg-white p-4 text-slate-800 shadow-sm">
-      {{ answer }}
-    </section>
+    <section
+      v-if="answer"
+      v-html="renderedAnswer"
+      class="markdown rounded-lg bg-white p-4 text-slate-800 shadow-sm"
+    ></section>
   </main>
 </template>
