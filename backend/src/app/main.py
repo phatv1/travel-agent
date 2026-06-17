@@ -75,12 +75,14 @@ async def chat(request: ChatRequest) -> ChatResponse:
     sessions_repo.autotitle_if_default(session_id, request.message)
 
     result = await run_travel(request.message)
+    errors = result.get("errors")
     trace = build_trace(request.message, result)
     assistant = sessions_repo.add_message(
         session_id,
         role="assistant",
         content=result.get("final_answer", ""),
         tool_calls=[t.model_dump() for t in trace],
+        error="; ".join(errors) if errors else None,
     )
 
     return ChatResponse(
@@ -91,4 +93,5 @@ async def chat(request: ChatRequest) -> ChatResponse:
         recommendations=result.get("recommendations"),
         cost_report=result.get("cost_report"),
         tool_calls=trace,
+        errors=errors or None,
     )

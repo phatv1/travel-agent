@@ -28,7 +28,11 @@ class InputState(TypedDict):
 
 
 class OutputState(TypedDict, total=False):
-    """External graph output returned to API/frontend consumers."""
+    """External graph output returned to API/frontend consumers.
+
+    `errors` is surfaced here (not internal-only) so the API/frontend can show
+    graceful partial-failure info instead of a flat 500.
+    """
 
     # messages lives in InputState only; redeclaring here (total=False)
     # would flip it to NotRequired and clash with the Required definition.
@@ -38,14 +42,15 @@ class OutputState(TypedDict, total=False):
 
     final_answer: str
 
+    errors: Annotated[list[str], add]
+
 
 class TravelState(InputState, OutputState, total=False):
     """Full internal LangGraph state.
 
     Reducers: messages uses add_messages; errors accumulates via operator.add
-    (written by multiple nodes); domain fields are last-write-wins.
+    (inherited from OutputState, written by multiple nodes); domain fields are
+    last-write-wins.
     """
 
     trip_request: TripRequestState
-
-    errors: Annotated[list[str], add]

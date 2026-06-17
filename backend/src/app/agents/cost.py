@@ -4,6 +4,7 @@ import json
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from app.agents._llm import error_label, invoke_structured
 from app.llms.factory import get_llm
 from app.schemas.cost import CostReport
 from app.schemas.state import TravelState
@@ -44,15 +45,17 @@ def cost(state: TravelState) -> dict:
         "itinerary": state.get("itinerary") or {},
         "recommendations": state.get("recommendations") or {},
     }
-    planner = get_llm().with_structured_output(CostReport)
-    report = CostReport.model_validate(
-        planner.invoke(
+    try:
+        report = invoke_structured(
+            get_llm(),
+            CostReport,
             [
                 SystemMessage(_SYSTEM_PROMPT),
                 HumanMessage(content=json.dumps(context, ensure_ascii=False, indent=2)),
-            ]
+            ],
         )
-    )
+    except Exception as exc:  # noqa: BLE001
+        return {"errors": [error_label("cost", exc)]}
 
     # LLMs miscalculate large-number sums; recompute the total from items deterministically.
     amounts = [item.amount_vnd for item in report.items if item.amount_vnd is not None]

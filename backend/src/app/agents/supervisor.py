@@ -2,6 +2,7 @@
 
 from langchain_core.messages import SystemMessage
 
+from app.agents._llm import error_label, invoke_structured
 from app.llms.factory import get_llm
 from app.schemas.state import TravelState
 from app.schemas.trip import TripRequest
@@ -29,8 +30,12 @@ Routing (quan trọng nhất):
 def supervisor(state: TravelState) -> dict:
     """Extract a TripRequest from the latest user message via structured output."""
     user_message = state["messages"][-1]
-    extractor = get_llm().with_structured_output(TripRequest)
-    trip_request = TripRequest.model_validate(
-        extractor.invoke([SystemMessage(_SYSTEM_PROMPT), user_message])
-    )
+    try:
+        trip_request = invoke_structured(
+            get_llm(),
+            TripRequest,
+            [SystemMessage(_SYSTEM_PROMPT), user_message],
+        )
+    except Exception as exc:  # noqa: BLE001 — degrade gracefully, never crash the graph
+        return {"errors": [error_label("supervisor", exc)]}
     return {"trip_request": trip_request.model_dump()}

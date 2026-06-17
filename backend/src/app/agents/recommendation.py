@@ -2,6 +2,7 @@
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from app.agents._llm import error_label, invoke_structured
 from app.llms.factory import get_llm
 from app.schemas.recommendation import RecommendationPlan
 from app.schemas.state import TravelState
@@ -34,13 +35,15 @@ def recommendation(state: TravelState) -> dict:
     if not trip_request.needs_recommendations:
         return {}
 
-    planner = get_llm().with_structured_output(RecommendationPlan)
-    plan = RecommendationPlan.model_validate(
-        planner.invoke(
+    try:
+        plan = invoke_structured(
+            get_llm(),
+            RecommendationPlan,
             [
                 SystemMessage(_SYSTEM_PROMPT),
                 HumanMessage(content=trip_request.model_dump_json(indent=2)),
-            ]
+            ],
         )
-    )
+    except Exception as exc:  # noqa: BLE001
+        return {"errors": [error_label("recommendation", exc)]}
     return {"recommendations": plan.model_dump()}

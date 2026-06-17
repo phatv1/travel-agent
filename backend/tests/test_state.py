@@ -32,11 +32,14 @@ def test_errors_uses_accumulating_reducer() -> None:
     assert typing.get_args(hints["errors"])[1:] == (add,)
 
 
-def test_output_state_excludes_internal_fields() -> None:
+def test_output_state_exposes_errors_but_keeps_internals_private() -> None:
     hints = typing.get_type_hints(OutputState, include_extras=True)
+    # errors is surfaced to consumers for graceful partial-failure display.
+    assert "errors" in hints
+    assert typing.get_args(hints["errors"])[1:] == (add,)
+    # trip_request is internal-only; messages lives in InputState to avoid a
+    # Required/NotRequired clash.
     assert "trip_request" not in hints
-    assert "errors" not in hints
-    # messages lives in InputState only to avoid a Required/NotRequired clash.
     assert "messages" not in hints
 
 

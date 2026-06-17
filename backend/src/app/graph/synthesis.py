@@ -19,8 +19,17 @@ Quy tắc:
 """
 
 
+_SUPERVISOR_FAILED_MESSAGE = (
+    "Xin lỗi, mình chưa nắm rõ yêu cầu của bạn. Bạn vui lòng nói lại điểm đến, "
+    "số ngày và số người để mình lên kế hoạch chi tiết hơn nhé."
+)
+
+
 def synthesize(state: TravelState) -> dict:
     """Compose the final natural-language answer from the structured agent outputs."""
+    if not state.get("trip_request"):
+        return {"final_answer": _SUPERVISOR_FAILED_MESSAGE}
+
     context = {
         "trip_request": state.get("trip_request") or {},
         "itinerary": state.get("itinerary") or {},
@@ -34,4 +43,10 @@ def synthesize(state: TravelState) -> dict:
         ]
     ).content
     text = content if isinstance(content, str) else str(content)
+
+    errors = state.get("errors") or []
+    if errors:
+        # error_label format is "node: Type: msg"; take the node name.
+        failed = ", ".join(e.split(":", 1)[0] for e in errors)
+        text = f"{text.rstrip()}\n\n*Lưu ý: một số phần chưa tạo được ({failed}).*"
     return {"final_answer": text}

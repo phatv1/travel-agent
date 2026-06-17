@@ -29,3 +29,7 @@ class ChatResponse(BaseModel):
     tool_calls: list[ToolCallData] | None = Field(
         default=None, description="Trace các bước agent cho thinking panel."
     )
+    errors: list[str] | None = Field(
+        default=None,
+        description="Các lỗi agent nếu có; graph luôn hoàn thành thay vì crash 500.",
+    )
