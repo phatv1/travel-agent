@@ -1,0 +1,36 @@
+"""Pydantic models for chat session persistence."""
+
+from pydantic import BaseModel, Field
+
+
+class ToolCallData(BaseModel):
+    name: str
+    label: str
+    icon: str
+    status: str
+    input: dict | None = None
+    output: dict | str | None = None
+
+
+class MessageOut(BaseModel):
+    id: str
+    role: str = Field(description="user | assistant")
+    content: str = ""
+    tool_calls: list[ToolCallData] | None = None
+    error: str | None = None
+    created_at: int
+
+
+class SessionSummary(BaseModel):
+    id: str
+    title: str
+    created_at: int
+    updated_at: int
+
+
+class SessionDetail(SessionSummary):
+    messages: list[MessageOut] = []
+
+
+class SessionTitleUpdate(BaseModel):
+    title: str
