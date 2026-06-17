@@ -23,15 +23,7 @@ class RecommendationItem(BaseModel):
         default=None,
         description=(
             "Mô tả ngắn lựa chọn này là gì; dùng để user hiểu nhanh option. "
-            "Ví dụ: khách sạn tầm trung gần biển, quán hải sản hợp bữa tối."
-        ),
-    )
-
-    price: str | None = Field(
-        default=None,
-        description=(
-            "Mô tả giá bằng ngôn ngữ tự nhiên; dùng để user đọc nhanh. "
-            "Ví dụ: khoảng 900k/đêm, 150k-250k/người, tầm trung."
+            "Ví dụ: khách sạn gần biển có hồ bơi, quán hải sản hợp bữa tối."
         ),
     )
 
@@ -39,7 +31,9 @@ class RecommendationItem(BaseModel):
         default=None,
         description=(
             "Chi phí ước lượng bằng VND nếu có; dùng để Cost Agent tổng hợp. "
-            "Ví dụ: 900000 cho khách sạn, 250000 cho quán ăn; nếu không rõ thì để null."
+            "Quán ăn: tính mỗi người. Khách sạn: tính mỗi phòng mỗi đêm, "
+            "phải ghi rõ sức chứa phòng (ví dụ phòng đôi 2 người) trong trường description. "
+            "Ví dụ: 900000 cho 1 phòng/đêm, 250000 cho 1 người ăn; nếu không rõ thì để null."
         ),
     )
 
@@ -68,6 +62,6 @@ class RecommendationPlan(BaseModel):
         default_factory=list,
         description=(
             "Các giả định khi đề xuất; dùng khi thiếu budget, ngày đi hoặc preference. "
-            "Ví dụ: giả định khách sạn tầm trung, giả định ăn uống mức vừa phải."
+            "Ví dụ: giả định khách sạn gần trung tâm, giả định 2 bữa chính mỗi ngày."
         ),
     )

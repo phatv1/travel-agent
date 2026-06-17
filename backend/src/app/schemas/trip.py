@@ -1,5 +1,3 @@
-from typing import Literal
-
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -34,7 +32,8 @@ class TripRequest(BaseModel):
     budget_preference: str | None = Field(
         default=None,
         description=(
-            "Ngân sách bằng ngôn ngữ tự nhiên; dùng để chọn mức gợi ý và đánh giá chi phí. "
+            "Ngân sách bằng ngôn ngữ tự nhiên; dùng để lọc gợi ý theo ngân sách "
+            "và đánh giá chi phí. "
             "Ví dụ: tầm 25 triệu VND, tối đa 1000 USD, 50-100 triệu, sao cũng được."
         ),
     )
@@ -56,16 +55,24 @@ class TripRequest(BaseModel):
         ),
     )
 
-    user_intent: Literal[
-        "full_plan",
-        "itinerary_only",
-        "recommendation_only",
-        "cost_only",
-    ] = Field(
-        default="full_plan",
+    needs_itinerary: bool = Field(
+        default=True,
         description=(
-            "Ý định chính của user; dùng để Supervisor route agent. "
-            "full_plan = lập kế hoạch đầy đủ; itinerary_only = chỉ lịch trình; "
-            "recommendation_only = chỉ gợi ý; cost_only = chỉ chi phí."
+            "True nếu user cần lập hoặc chỉnh sửa lịch trình theo ngày. "
+            "Ví dụ: 'lên lịch trình', 'plan 5 ngày', 'thêm địa điểm vào ngày 2'."
+        ),
+    )
+
+    needs_recommendations: bool = Field(
+        default=True,
+        description=(
+            "True nếu user cần gợi ý khách sạn, quán ăn hoặc địa điểm cụ thể."
+        ),
+    )
+
+    needs_cost_estimation: bool = Field(
+        default=True,
+        description=(
+            "True nếu user cần ước lượng chi phí, so sánh ngân sách hoặc tối ưu budget."
         ),
     )

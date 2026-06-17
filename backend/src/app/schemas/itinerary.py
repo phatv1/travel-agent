@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -11,10 +13,27 @@ class ScheduleItem(BaseModel):
         ),
     )
 
+    time_slot: Literal["morning", "afternoon", "evening", "full_day", "flexible"] | None = Field(
+        default=None,
+        description=(
+            "Khung thời gian của hoạt động; giúp Recommendation Agent gợi ý quán ăn "
+            "đúng bữa và Cost Agent phân bổ chi phí hợp lý."
+        ),
+    )
+
+    location_hint: str | None = Field(
+        default=None,
+        description=(
+            "Tên địa điểm hoặc khu vực chính của hoạt động; dùng để map lịch trình "
+            "với hotel, restaurant và chi phí địa phương. Ví dụ: Mỹ Khê, Sơn Trà, Hội An."
+        ),
+    )
+
     cost_vnd: int | None = Field(
         default=None,
         description=(
-            "Chi phí ước lượng của hoạt động bằng VND nếu có; dùng để Cost Agent tổng hợp. "
+            "Chi phí ước lượng của hoạt động bằng VND, tính trên mỗi đầu người nếu có; "
+            "dùng để Cost Agent tổng hợp. "
             "Ví dụ: 0 cho hoạt động miễn phí, 300000 cho vé hoặc trải nghiệm; "
             "nếu không rõ thì để null."
         ),

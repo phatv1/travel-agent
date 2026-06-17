@@ -1,4 +1,5 @@
 from enum import StrEnum
+from operator import add
 from typing import Annotated, Any, TypedDict
 
 from langgraph.graph.message import AnyMessage, add_messages
@@ -12,16 +13,39 @@ class AgentName(StrEnum):
     END = "end"
 
 
-class TravelState(TypedDict, total=False):
+# Domain results are stored as JSON-serializable dicts. Node boundary:
+# read via Model.model_validate(state["field"]), write via model.model_dump().
+type TripRequestState = dict[str, Any]
+type ItineraryState = dict[str, Any]
+type RecommendationState = dict[str, Any]
+type CostReportState = dict[str, Any]
+
+
+class InputState(TypedDict):
+    """External graph input. Callers only need to provide messages."""
+
     messages: Annotated[list[AnyMessage], add_messages]
 
-    trip_request: dict[str, Any]
 
-    itinerary: dict[str, Any]
-    recommendations: dict[str, Any]
-    cost_report: dict[str, Any]
+class OutputState(TypedDict, total=False):
+    """External graph output returned to API/frontend consumers."""
 
-    next_agent: AgentName
+    # messages lives in InputState only; redeclaring here (total=False)
+    # would flip it to NotRequired and clash with the Required definition.
+    itinerary: ItineraryState
+    recommendations: RecommendationState
+    cost_report: CostReportState
 
     final_answer: str
-    errors: list[str]
+
+
+class TravelState(InputState, OutputState, total=False):
+    """Full internal LangGraph state.
+
+    Reducers: messages uses add_messages; errors accumulates via operator.add
+    (written by multiple nodes); domain fields are last-write-wins.
+    """
+
+    trip_request: TripRequestState
+
+    errors: Annotated[list[str], add]

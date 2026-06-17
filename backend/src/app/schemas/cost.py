@@ -16,8 +16,9 @@ class CostItem(BaseModel):
     amount_vnd: int | None = Field(
         default=None,
         description=(
-            "Số tiền ước lượng bằng VND cho nhóm chi phí này; dùng để tính tổng. "
-            "Ví dụ: 5000000, 3600000, 1200000; nếu không đủ thông tin thì để null."
+            "Số tiền ước lượng bằng VND cho nhóm chi phí này, tính trên mỗi đầu người; "
+            "dùng để tính tổng. Ví dụ: 5000000, 3600000, 1200000; "
+            "nếu không đủ thông tin thì để null."
         ),
     )
 
@@ -36,7 +37,7 @@ class CostReport(BaseModel):
     summary: str = Field(
         description=(
             "Tóm tắt ngắn về chi phí dự kiến; dùng để user hiểu nhanh tổng quan. "
-            "Ví dụ: Chi phí dự kiến nằm trong budget 25 triệu nếu chọn khách sạn tầm trung."
+            "Ví dụ: Chi phí dự kiến khoảng 5 triệu/người cho 5 ngày, nằm trong ngân sách."
         ),
     )
 
@@ -45,10 +46,12 @@ class CostReport(BaseModel):
         description="Danh sách nhóm chi phí; dùng để frontend render breakdown và tính tổng.",
     )
 
-    total_vnd: int | None = Field(
+    total_per_person_vnd: int | None = Field(
         default=None,
         description=(
-            "Tổng chi phí ước lượng bằng VND; dùng để so sánh với budget. "
+            "Tổng chi phí ước lượng trên mỗi đầu người bằng VND; đây là số tiền "
+            "mỗi người cần chuẩn bị. Bằng tổng các amount_vnd trong items. "
+            "Dùng để so sánh với budget user đưa ra. "
             "Nếu chưa đủ thông tin để tính tổng thì để null."
         ),
     )
@@ -79,7 +82,7 @@ class CostReport(BaseModel):
         default_factory=list,
         description=(
             "Các giả định khi tính chi phí; dùng để minh bạch với user. "
-            "Ví dụ: giả định đi 2 người, giả định khách sạn tầm trung."
+            "Ví dụ: giả định đi 2 người, giả định khách sạn 900k/đêm."
         ),
     )
 
