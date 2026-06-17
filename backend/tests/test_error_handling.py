@@ -157,6 +157,11 @@ def test_graph_runs_ordered_plan_and_skips_unscheduled(monkeypatch) -> None:
         "invoke_structured",
         lambda *a, **k: CostReport(summary="ok"),
     )
+    # cost agent now does a tool-gathering phase before invoke_structured; bypass it
+    # so the test stays fast and free of real LLM/tool calls.
+    monkeypatch.setattr(
+        cost_module, "gather_via_tools", lambda llm, tools, messages, **kw: messages
+    )
     monkeypatch.setattr(
         synthesis_module,
         "get_llm",
