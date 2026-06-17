@@ -71,6 +71,10 @@ def test_itinerary_node_records_error(monkeypatch) -> None:
     def boom(*args, **kwargs):
         raise RuntimeError("parse failed")
 
+    # itinerary agent does a tool-gathering phase before invoke_structured; bypass it.
+    monkeypatch.setattr(
+        itinerary_module, "gather_via_tools", lambda llm, tools, messages, **kw: messages
+    )
     monkeypatch.setattr(itinerary_module, "invoke_structured", boom)
     state: TravelState = {
         "trip_request": TripRequest(destination="Đà Nẵng").model_dump(),
@@ -147,11 +151,20 @@ def test_graph_runs_ordered_plan_and_skips_unscheduled(monkeypatch) -> None:
             steps=["itinerary", "cost"],
         ),
     )
+    # itinerary agent now does a tool-gathering phase + TWO structured calls:
+    # first PickedAttractions (filter), then ItineraryPlan (schedule). Return each
+    # by matching the schema arg so the test stays fast and free of real calls.
     monkeypatch.setattr(
-        itinerary_module,
-        "invoke_structured",
-        lambda *a, **k: ItineraryPlan(destination="Đà Nẵng", summary="5 ngày"),
+        itinerary_module, "gather_via_tools", lambda llm, tools, messages, **kw: messages
     )
+
+    def _itinerary_invoke(_llm, schema, _messages, **kw):
+        from app.agents.itinerary import PickedAttractions
+        if schema is PickedAttractions:
+            return PickedAttractions(attractions=[])
+        return ItineraryPlan(destination="Đà Nẵng", summary="5 ngày")
+
+    monkeypatch.setattr(itinerary_module, "invoke_structured", _itinerary_invoke)
     monkeypatch.setattr(
         cost_module,
         "invoke_structured",
