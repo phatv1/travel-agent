@@ -143,7 +143,7 @@ def test_graph_runs_ordered_plan_and_skips_unscheduled(monkeypatch) -> None:
         supervisor_module,
         "invoke_structured",
         lambda *a, **k: SupervisorDecision(
-            trip_request=TripRequest(destination="Đà Nẵng"),
+            trip_request=TripRequest(destination="Đà Nẵng", time_preference="5 ngày"),
             steps=["itinerary", "cost"],
         ),
     )
@@ -170,3 +170,28 @@ def test_graph_runs_ordered_plan_and_skips_unscheduled(monkeypatch) -> None:
     assert result.get("cost_report")
     assert not result.get("recommendations")
     assert result.get("final_answer") == "tóm tắt"
+
+
+def test_synthesize_asks_for_missing_required_fields() -> None:
+    synthesize = synthesis_module.synthesize
+
+    def answer(trip: TripRequest) -> str:
+        return synthesize({"trip_request": trip.model_dump(), "messages": []})["final_answer"]
+
+    # destination present, time missing -> clarify lists time + optional fields,
+    # and asks whether the user wants to add more (comprehensive first-time prompt).
+    text = answer(TripRequest(destination="Đà Nẵng")).lower()
+    assert "thời gian" in text
+    assert "tùy chọn" in text  # optional fields surfaced even when only required missing
+    assert "bổ sung" in text
+
+    # time present, destination missing -> clarify lists destination + optional.
+    text = answer(TripRequest(time_preference="5 ngày")).lower()
+    assert "điểm đến" in text
+
+    # both required missing but a travel field present (companions) -> list both.
+    text = answer(TripRequest(companions="2 người")).lower()
+    assert "điểm đến" in text
+    assert "thời gian" in text
+    # companions is provided, so it must NOT be re-asked as missing.
+    assert "số người" not in text

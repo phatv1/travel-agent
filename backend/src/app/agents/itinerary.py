@@ -19,8 +19,10 @@ Mỗi ngày (DayPlan) chia 3-4 hoạt động theo buổi:
 - ScheduleItem.cost_vnd: chi phí MỖI ĐẦU NGƯỜI bằng VND; 0 cho miễn phí; null nếu không rõ.
 
 Quy tắc khác:
-- Ước lượng số ngày từ time_preference (ví dụ "5 ngày 4 đêm" → 5 ngày).
-  Nếu không rõ, giả định 3 ngày 2 đêm và ghi vào assumptions.
+- time_preference luôn được cung cấp (supervisor đã yêu cầu). Ước lượng số ngày từ đó
+  (ví dụ "5 ngày 4 đêm" → 5 ngày, "cuối tuần" → 2 ngày).
+- KHÔNG mặc định độ dài chuyến (không tự dùng "3 ngày 2 đêm"). Nếu time_preference mơ hồ
+  (ví dụ "tháng 8"), suy luận số ngày hợp lý nhất VÀ ghi rõ giả định vào assumptions.
 - Phân bổ khu vực (area) hợp lý theo ngày để giảm di chuyển.
 - Phù hợp với companions và preferences nếu có.
 - assumptions: ghi các giả định khi thiếu thông tin.
