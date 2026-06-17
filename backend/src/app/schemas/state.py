@@ -22,3 +22,6 @@ class TravelState(TypedDict, total=False):
     cost_report: dict[str, Any]
 
     next_agent: AgentName
+
+    final_answer: str
+    errors: list[str]
