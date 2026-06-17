@@ -27,16 +27,6 @@ class RecommendationItem(BaseModel):
         ),
     )
 
-    cost_vnd: int | None = Field(
-        default=None,
-        description=(
-            "Chi phí ước lượng bằng VND nếu có; dùng để Cost Agent tổng hợp. "
-            "Quán ăn: tính mỗi người. Khách sạn: tính mỗi phòng mỗi đêm, "
-            "phải ghi rõ sức chứa phòng (ví dụ phòng đôi 2 người) trong trường description. "
-            "Ví dụ: 900000 cho 1 phòng/đêm, 250000 cho 1 người ăn; nếu không rõ thì để null."
-        ),
-    )
-
     reason: str = Field(
         description=(
             "Lý do lựa chọn này phù hợp; dùng để giải thích recommendation. "

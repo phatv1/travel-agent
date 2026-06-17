@@ -25,25 +25,28 @@ from app.tools.search import (
     get_place_info,
     list_attractions,
     search_attractions,
+    search_events,
 )
 
 _GATHER_PROMPT = """\
-Bạn là chuyên gia du lịch. Thu thập dữ liệu địa điểm THẬT bằng tool:
+Bạn là chuyên gia du lịch. Thu thập dữ liệu địa điểm THẬT + sự kiện theo mùa bằng tool:
 - list_attractions: BẮT BUỘC gọi đầu tiên cho destination, lấy danh sách địa điểm thật.
   Danh sách CÓ NOISE — nhiều nơi KHÔNG thuộc destination (ví dụ Đà Nẵng nhưng có Cửa Tùng,
   Hải Tiến, Phương Mai từ vùng khác). Bạn phải dùng hiểu biết địa lý để lọc.
 - get_place_info: gọi cho 3-5 địa điểm nghi ngờ để kiểm tra Wikipedia summary.
-- search_attractions: gọi nếu cần thêm gợi ý destination-specific hoặc thông tin GIÁ VÉ.
+- search_attractions: gọi nếu cần thêm gợi ý destination-specific.
+- search_events: BẮT BUỘC gọi để tìm sự kiện/lễ hội/thời tiết theo mùa trong
+  time_preference của user (ví dụ "sự kiện Đà Nẵng tháng 8"). Dùng để gợi ý hoạt động
+  đặc biệt theo mùa.
 Gọi đủ tool rồi thì dừng (không cần trả lời thêm).
 """
 
 _PICK_PROMPT = """\
-Bạn là chuyên gia địa lý du lịch. Từ danh sách địa điểm thu thập, chọn ra CHỈ những nơi
-THỰC SỰ thuộc {destination} (loại bỏ noise vùng khác). Ví dụ lọc:
+Bạn là chuyên gia địa lý du lịch. Từ danh sách địa điểm + sự kiện thu thập, chọn ra CHỈ
+những nơi THỰC SỰ thuộc {destination} (loại bỏ noise vùng khác). Ví dụ lọc:
 - Đà Nẵng: giữ Mỹ Khê, Linh Ứng, Bà Nà, Cầu Rồng; bỏ Cửa Tùng (Quảng Trị), Hải Tiến (Thanh Hóa).
 - Phú Quốc: giữ Vinpearl Safari, Hòn Thơm; bỏ nơi khác tỉnh.
-Đồng thời ghi giá vé ước lượng (VND/người) nếu search_attractions có đề cập, 0 cho miễn phí,
-null nếu không rõ. Trả về list ĐỦ 5-8 địa điểm để lập lịch.
+Trả về list ĐỦ 5-8 địa điểm để lập lịch. (KHÔNG điền giá vé — Cost Agent sẽ tự tìm.)
 """
 
 
@@ -56,7 +59,7 @@ class PickedAttraction(BaseModel):
     area: str = Field(description="Khu vực (ví dụ Mỹ Khê, Sơn Trà, phố cổ).")
     typical_cost_vnd: int | None = Field(
         default=None,
-        description="Giá vé ước lượng VND/người; 0 cho miễn phí; null nếu không rõ.",
+        description="BỎ — không dùng nữa. Cost Agent tự tìm giá.",
     )
 
 
@@ -70,16 +73,18 @@ class PickedAttractions(BaseModel):
 
 
 _SCHEDULE_PROMPT = """\
-Bạn là chuyên gia lập lịch trình. Từ TripRequest và danh sách địa điểm ĐÃ LỌC (chỉ {destination}),
-phân bổ thành lịch trình theo ngày. Mỗi hoạt động BẮT BUỘC điền đủ:
+Bạn là chuyên gia lập lịch trình. Từ TripRequest, danh sách địa điểm ĐÃ LỌC (chỉ {destination}),
+và sự kiện theo mùa, phân bổ thành lịch trình theo ngày. Mỗi hoạt động BẮT BUỘC điền đủ:
 
 - ScheduleItem.text: ngắn, rõ (ví dụ "Dạo biển {destination} khu vực đã chọn").
 - ScheduleItem.time_slot: BẮT BUỘC một trong morning / afternoon / evening / full_day.
 - ScheduleItem.location_hint: BẮT BUỘC tên địa điểm từ danh sách đã lọc.
-- ScheduleItem.cost_vnd: dùng typical_cost_vnd từ danh sách; KHÔNG bịa.
 
 Mỗi ngày BẮT BUỘC điền DayPlan.area (khu vực chính). Ước lượng số ngày từ time_preference
-(5 ngày → 5 DayPlan). Phân bổ khu vực hợp lý để giảm di chuyển. assumptions ghi giả định.
+(5 ngày → 5 DayPlan). Phân bổ khu vực hợp lý để giảm di chuyển. Tích hợp sự kiện theo mùa
+vào lịch nếu phù hợp (ví dụ "Xem pháo hoa quốc tế" nếu có lễ hội). assumptions ghi giả định.
+
+LƯU Ý: KHÔNG điền cost_vnd (đã bỏ trường này — Cost Agent sẽ tự tìm giá).
 """
 
 
@@ -111,8 +116,8 @@ def itinerary(state: TravelState) -> dict:
     try:
         llm = get_llm()
 
-        # Phase 1a: gather real attractions via tool-calling (agentic showcase).
-        tools = [list_attractions, get_place_info, search_attractions]
+        # Phase 1a: gather real attractions + events via tool-calling (agentic showcase).
+        tools = [list_attractions, get_place_info, search_attractions, search_events]
         gathered = gather_via_tools(llm, tools, _gather_messages(context, trip_request.destination))
         tool_text = _tool_results_as_text(gathered)
 

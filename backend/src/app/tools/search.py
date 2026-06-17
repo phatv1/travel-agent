@@ -102,6 +102,33 @@ def get_place_info(place_name: str) -> str:
 
 
 @tool
+def search_events(destination: str, time_preference: str) -> str:
+    """Tìm sự kiện, lễ hội, thời tiết theo mùa cho một điểm đến trong khoảng thời gian đi.
+
+    Args:
+        destination: Tên điểm đến (ví dụ "Đà Nẵng", "Phú Quốc").
+        time_preference: Khoảng thời gian đi (ví dụ "tháng 8", "5 ngày 4 đêm",
+            "cuối tuần"). Dùng để nhắm sự kiện đúng mùa.
+
+    Trả về JSON: list snippet với tiêu đề và mô tả về lễ hội, sự kiện, thời tiết mùa.
+    Dùng để gợi ý lý do đi + hoạt động đặc biệt theo mùa (ví dụ Lễ hội pháo hoa quốc tế
+    Đà Nẵng, mùa hoa anh đào, mùa mưa) thay vì chỉ lập lịch generic.
+    """
+    from ddgs import DDGS  # lazy
+
+    q = f"sự kiện lễ hội {destination} {time_preference}"
+    try:
+        with DDGS() as ddgs:
+            results = [
+                {"title": r.get("title", ""), "body": r.get("body", "")}
+                for r in ddgs.text(q, max_results=4)
+            ]
+        return json.dumps({"query": q, "results": results}, ensure_ascii=False)
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"query": q, "results": [], "error": str(exc)[:120]}, ensure_ascii=False)
+
+
+@tool
 def search_attractions(destination: str, interest: str = "") -> str:
     """Tìm điểm tham quan + thông tin giá qua DuckDuckGo (blog/bài báo, cập nhật).
 

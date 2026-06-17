@@ -42,15 +42,13 @@ THẬT đã thu thập (qua Geoapify), tổng hợp thành RecommendationPlan:
 
 - hotels[]: 3-5 khách sạn từ tool (dùng TÊN THẬT, KHÔNG bịa tên).
   + area: từ dữ liệu tool.
-  + cost_vnd: ước lượng VND/phòng/đêm từ hạng (KS bình dân 500-800k, trung cấp
-    800k-1.5M, cao cấp 1.5-3M). Ghi sức chứa phòng trong description.
+  + description: ghi sức chứa phòng + tiện ích (ví dụ "phòng đôi 2 người, có hồ bơi").
+  + KHÔNG điền cost_vnd (đã bỏ trường này — Cost Agent sẽ tự tìm giá).
 - restaurants[]: 3-5 quán từ tool (dùng TÊN THẬT, KHÔNG bịa tên).
   + area: từ dữ liệu tool.
-  + cost_vnd: ước lượng VND/người từ loại ẩm thực (Vietnamese 100-200k, Korean/
-    international 300-500k, hải sản 300-600k).
-- reason: dựa trên distance (gần khu vực), loại ẩm thực phù hợp preferences, hạng
-  khách sạn phù hợp budget.
-- assumptions: ghi giả định về giá (ước lượng, không phải giá thật).
+  + description: loại ẩm thực (Vietnamese, hải sản, Korean...).
+- reason: dựa trên distance (gần khu vực), loại ẩm thực phù hợp preferences.
+- assumptions: ghi giả định nếu cần.
 
 LƯU Ý: Chỉ dùng địa điểm THẬT đã thu thập. KHÔNG bịa tên khách sạn/quán ăn.
 """

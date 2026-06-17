@@ -1,14 +1,12 @@
-"""Cost agent: estimate per-person costs using tool-calling + deterministic backstop.
+"""Cost agent: per-item real pricing via tool-calling + deterministic backstop.
 
-Two-phase pattern (showcase + correctness):
-  Phase 1 (gather): LLM bind_tools calls get_flight_price / check_budget_status /
-    compute_trip_total to collect real data (agentic loop, _GATHER_PROMPT).
-  Phase 2 (synthesize): LLM produces CostReport from context + tool results as
-    text (clean structured output, _SYNTHESIZE_PROMPT — no tool mention, since
-    Ollama's structured-output mode chokes when the prompt references tools it
-    can't call).
-Then the node recomputes total + budget status deterministically — the LLM's tool
-calls showcase the loop, but correctness-critical values never depend on LLM math.
+Single source of truth for ALL trip costs (SRP after refactor): reads
+recommendations + itinerary from state, then searches a REAL price for each item
+(per-item design — consistent with what the UI shows) via search_price, gets the
+live flight via get_flight_price, and uses arithmetic tools (add/multiply/divide)
+to compute per-person totals. Then _finalize recomputes total + budget status
+deterministically — the LLM's tool calls showcase the agentic loop, but the final
+correctness-critical values never depend on LLM math.
 """
 
 import json
@@ -25,29 +23,51 @@ from app.tools.flight import get_flight_price
 from app.tools.loop import gather_via_tools
 
 _GATHER_PROMPT = """\
-Bạn là chuyên gia chi phí du lịch. Thu thập dữ liệu thật bằng tool:
-- get_flight_price: BẮT BUỘC gọi cho đường bay origin→destination (không tự bịa vé).
-- check_budget_status: khi có tổng ước lượng VÀ budget.
-- compute_trip_total: khi cần tính tổng từ chi phí mỗi ngày.
+Bạn là chuyên gia chi phí du lịch. Tính chi phí THẬT cho chuyến đi qua tool:
+
+BƯỚC 1 — Vé máy bay (BẮT BUỘC nếu có origin):
+- get_flight_price: gọi với IATA của origin → destination để lấy giá khứ hồi thật.
+
+BƯỚC 2 — Giá từng khách sạn/quán đã recommend (BẮT BUỘC, per-item):
+- search_price: gọi cho MỖI khách sạn trong recommendations.hotels (query:
+  "giá phòng {name} {destination}"). Lấy giá/phòng/đêm.
+- search_price: gọi cho MỖI quán ăn trong recommendations.restaurants (query:
+  "giá {name} {destination}"). Lấy giá/người.
+
+BƯỚC 3 — Tính toán số học (DÙNG tool, không tự tính):
+- multiply: giá KS/đêm × số đêm (số đêm = số ngày - 1).
+- divide: tổng KS / số người (lấy companions từ trip_request).
+- add: cộng các khoản lại.
+
+BƯỚC 4 — check_budget_status: khi có tổng VÀ budget, gọi tool đánh giá.
 Gọi đủ tool rồi thì dừng (không cần trả lời thêm).
 """
 
 _SYNTHESIZE_PROMPT = """\
-Bạn là chuyên gia ước lượng chi phí du lịch. Từ dữ liệu chuyến đi và kết quả tool,
+Bạn là chuyên gia chi phí du lịch. Từ dữ liệu chuyến đi và giá THẬT đã thu thập qua tool,
 tổng hợp CostReport (tất cả amount_vnd là VND, mỗi đầu người):
 
-- items[]: nhóm chi phí. Di chuyển (dùng giá vé tool thật), Lưu trú (KS/phòng/đêm
-  chia người × đêm), Ăn uống (quán/người × bữa), Hoạt động (từ itinerary),
-  Dự phòng (5-10% nếu thiếu).
+- items[]: nhóm chi phí:
+  + Di chuyển: vé máy bay từ get_flight_price (chia số người nếu cần) + nội vùng.
+  + Lưu trú: giá KS (từ search_price) × số đêm, chia số người/phòng.
+  + Ăn uống: giá quán (từ search_price) × số bữa/người.
+  + Hoạt động: ước lượng vé tham quan (nếu có).
+  + Dự phòng: 5-10% nếu thiếu.
 - total_per_person_vnd: tổng items (hệ thống sẽ tính lại).
 - status: để mặc định, hệ thống tính lại chính xác.
-- assumptions: ghi giả định (số người, số đêm, nguồn giá vé).
+- assumptions: ghi giả định (số người, số đêm, nguồn giá vé/KS/quán từ tool).
 - suggestions: gợi ý tiết kiệm nếu vượt budget.
+
+LƯU Ý: Chỉ dùng GIÁ THẬT từ tool. Nếu tool không trả giá cho một mục, ước lượng hợp lý
+và ghi vào assumptions.
 """
 
 
 def _gather_messages(context: dict) -> list:
-    prompt = f"Thông tin chuyến đi:\n{json.dumps(context, ensure_ascii=False, indent=2)}"
+    prompt = (
+        "Dữ liệu chuyến đi (recommendations + lịch trình + yêu cầu):\n"
+        f"{json.dumps(context, ensure_ascii=False, indent=2)}"
+    )
     return [SystemMessage(_GATHER_PROMPT), HumanMessage(content=prompt)]
 
 
@@ -61,7 +81,7 @@ def _tool_results_as_text(messages: list) -> str:
         for tc in calls:
             lines.append(f"- Đã gọi {tc['name']}({json.dumps(tc['args'], ensure_ascii=False)})")
         if type(m).__name__ == "ToolMessage":
-            lines.append(f"  → kết quả: {m.content}")
+            lines.append(f"  → kết quả: {str(m.content)[:500]}")
     return "\n".join(lines)
 
 
@@ -83,34 +103,44 @@ def _finalize(report: CostReport, trip_request: TripRequest) -> CostReport:
 
 
 def cost(state: TravelState) -> dict:
-    """Estimate per-person costs: tool-gathered data → CostReport → deterministic total/status."""
+    """Estimate per-person costs: per-item real pricing → CostReport → finalize."""
     trip_request = TripRequest.model_validate(state.get("trip_request") or {})
+    recommendations = state.get("recommendations") or {}
     context = {
         "trip_request": trip_request.model_dump(),
-        "itinerary": state.get("itinerary") or {},
-        "recommendations": state.get("recommendations") or {},
+        "recommendations": recommendations,
+        "itinerary_days": len((state.get("itinerary") or {}).get("days", [])),
     }
 
     # Import domain cost tools here to avoid an import cycle (cost.py ↔ tools.cost).
     from app.tools.cost import (
+        add,
         check_budget_status,
-        compute_trip_total,
-        convert_currency,
+        divide,
+        multiply,
+        search_price,
     )
 
     try:
         llm = get_llm()
 
-        # Phase 1: gather real data via tool-calling (agentic showcase).
-        tools = [get_flight_price, compute_trip_total, check_budget_status, convert_currency]
+        # Phase 1: gather real prices via tool-calling (agentic showcase).
+        tools = [
+            get_flight_price,
+            search_price,
+            add,
+            multiply,
+            divide,
+            check_budget_status,
+        ]
         gathered = gather_via_tools(llm, tools, _gather_messages(context))
 
-        # Phase 2: structured CostReport with tool results as text (clean history).
+        # Phase 2: structured CostReport with tool results as text.
         tool_text = _tool_results_as_text(gathered)
         final_prompt = (
             f"{json.dumps(context, ensure_ascii=False, indent=2)}\n\n"
-            f"DỮ LIỆU TOOL ĐÃ THU THẬP:\n{tool_text}\n\n"
-            "Dựa vào dữ liệu trên (đặc biệt giá vé máy bay thật), tổng hợp CostReport ĐẦY ĐỦ."
+            f"GIÁ THẬT ĐÃ THU THẬP:\n{tool_text}\n\n"
+            "Dựa vào giá thật trên, tổng hợp CostReport ĐẦY ĐỦ với items[]."
         )
         report = invoke_structured(
             llm, CostReport, [SystemMessage(_SYNTHESIZE_PROMPT), HumanMessage(content=final_prompt)]

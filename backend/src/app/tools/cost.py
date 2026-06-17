@@ -102,3 +102,60 @@ def convert_currency(amount_vnd: int, target_currency: str) -> str:
     if rate is None:
         return f"không hỗ trợ {target_currency}"
     return f"{round(amount_vnd / rate)} {cur}"
+
+
+@tool
+def add(a: int, b: int) -> str:
+    """Cộng hai số (VND). Dùng để cộng các khoản chi phí."""
+    return str(a + b)
+
+
+@tool
+def multiply(a: int, b: int) -> str:
+    """Nhân hai số (VND). Dùng để tính tổng khi biết đơn giá × số lượng.
+
+    Ví dụ: giá KS/đêm × số đêm; giá quán/người × số người; vé × số lượng.
+    """
+    return str(a * b)
+
+
+@tool
+def divide(a: int, b: int) -> str:
+    """Chia hai số. Dùng để quy đổi về mỗi người hoặc mỗi đêm.
+
+    Ví dụ: tổng nhóm KS / số người; tổng quán / số bữa.
+    """
+    if b == 0:
+        return "lỗi: chia cho 0"
+    return str(round(a / b))
+
+
+@tool
+def search_price(query: str) -> str:
+    """Tìm giá (VND) cho một mục cụ thể qua DuckDuckGo (blog/bài báo).
+
+    Args:
+        query: Câu truy vấn tự nhiên. Ví dụ:
+            - "giá phòng khách sạn Seven Sea Đà Nẵng"
+            - "vé Bà Nà Hills 2026"
+            - "giá nhà hàng hải sản Bé Anh Đà Nẵng"
+
+    Trả về JSON: list snippet với tiêu đề và mô tả (thường chứa giá thật).
+    Dùng để lấy giá THẬT cho từng khách sạn/quán/địa điểm đã recommend, thay vì
+    ước lượng. Trích số tiền VND từ mô tả.
+    """
+    import json
+
+    from ddgs import DDGS  # lazy
+
+    try:
+        with DDGS() as ddgs:
+            results = [
+                {"title": r.get("title", ""), "body": r.get("body", "")}
+                for r in ddgs.text(query, max_results=4)
+            ]
+        return json.dumps({"query": query, "results": results}, ensure_ascii=False)
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps(
+            {"query": query, "results": [], "error": str(exc)[:120]}, ensure_ascii=False
+        )
