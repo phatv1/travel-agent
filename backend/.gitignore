@@ -1,0 +1,4 @@
+# Python packaging/venv dirs (e.g. a venv laid out as backend/lib/).
+# Scoped here, not at repo root, so the root rule doesn't catch frontend/src/lib/.
+lib/
+lib64/
