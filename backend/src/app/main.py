@@ -1,11 +1,16 @@
 """FastAPI application entrypoint."""
 
+import json
+import os
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.graph.runner import run_travel
+from app.graph.stream import stream_travel
 from app.graph.trace import build_trace
 from app.repositories import sessions as sessions_repo
 from app.schemas.api import ChatRequest, ChatResponse
@@ -19,6 +24,19 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Travel Agent API", lifespan=lifespan)
+
+# Dev: SSE is read directly from the backend (the Vite proxy buffers text/event-stream,
+# which would kill the live token stream), so the frontend calls /chat/stream
+# cross-origin. JSON endpoints still go through the proxy. In production both are
+# same-origin and this is a no-op.
+_allowed_origin = os.getenv("VITE_ORIGIN", "http://localhost:5173")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[_allowed_origin],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.exception_handler(Exception)
@@ -60,6 +78,117 @@ def rename_session(session_id: str, update: SessionTitleUpdate) -> SessionSummar
 @app.delete("/sessions/{session_id}", status_code=204)
 def delete_session(session_id: str) -> None:
     sessions_repo.delete_session(session_id)
+
+
+@app.post("/chat/stream")
+async def chat_stream(request: ChatRequest) -> StreamingResponse:
+    """Stream the travel graph as Server-Sent Events.
+
+    Flow per event: node_start -> (tool_start -> tool_end)* -> node_end, repeated
+    per agent; then token events for the final answer; then a `done` event with
+    session/message ids. The assistant message is persisted once, after the
+    graph finishes, carrying the reconstructed trace and authoritative answer.
+    """
+    if request.session_id:
+        session_id = request.session_id
+        if sessions_repo.get_session(session_id) is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+    else:
+        session_id = sessions_repo.create_session()["id"]
+
+    sessions_repo.add_message(session_id, role="user", content=request.message)
+    sessions_repo.autotitle_if_default(session_id, request.message)
+
+    async def _generate() -> AsyncIterator[str]:
+        def sse(event: str, payload: dict) -> str:
+            body = json.dumps(payload, ensure_ascii=False, default=str)
+            return f"event: {event}\ndata: {body}\n\n"
+
+        # Tell the client which session this stream belongs to immediately, plus a
+        # heartbeat so proxies/clients don't time out on slow LLM steps.
+        yield f"event: session\ndata: {json.dumps({'session_id': session_id})}\n\n"
+        yield ": ping\n\n"
+
+        trace: list[dict] = []  # reconstructed ToolCallData-shaped steps for persistence
+        final_answer = ""
+        error_msg: str | None = None
+
+        async for etype, payload in stream_travel(request.message):
+            yield sse(etype, payload)
+
+            if etype == "node_start":
+                trace.append(
+                    {
+                        "name": payload["name"],
+                        "label": payload.get("label", ""),
+                        "icon": payload.get("icon", ""),
+                        "status": "running",
+                        "input": {},
+                        "kind": "node",
+                    }
+                )
+            elif etype == "node_end":
+                for step in reversed(trace):
+                    if step["name"] == payload["name"] and step.get("status") == "running":
+                        step["status"] = "done"
+                        step["output"] = payload.get("output")
+                        break
+            elif etype == "tool_start":
+                trace.append(
+                    {
+                        "name": payload["name"],
+                        "label": payload["name"],
+                        "icon": "🔧",
+                        "status": "running",
+                        "input": payload.get("input"),
+                        "kind": "tool",
+                        "node": payload.get("node"),
+                    }
+                )
+            elif etype == "tool_end":
+                for step in reversed(trace):
+                    if (
+                        step.get("kind") == "tool"
+                        and step["name"] == payload["name"]
+                        and step.get("node") == payload.get("node")
+                        and step.get("status") == "running"
+                    ):
+                        step["status"] = "done"
+                        step["output"] = payload.get("output")
+                        break
+            elif etype == "final":
+                final_answer = payload.get("final_answer", "")
+            elif etype == "error":
+                error_msg = payload.get("message", "")
+
+        # Persist the assistant turn once, with the live trace + authoritative answer.
+        assistant = sessions_repo.add_message(
+            session_id,
+            role="assistant",
+            content=final_answer,
+            tool_calls=trace if trace else None,
+            error=error_msg,
+        )
+
+        yield sse(
+            "done",
+            {
+                "session_id": session_id,
+                "message_id": assistant["id"],
+                "final_answer": final_answer,
+                "errors": [error_msg] if error_msg else None,
+            },
+        )
+
+    return StreamingResponse(
+        _generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # disable nginx buffering if behind one
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @app.post("/chat", response_model=ChatResponse)

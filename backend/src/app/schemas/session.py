@@ -6,10 +6,14 @@ from pydantic import BaseModel, Field
 class ToolCallData(BaseModel):
     name: str
     label: str
-    icon: str
+    icon: str = "🔧"
     status: str
     input: dict | None = None
     output: dict | str | None = None
+    # "node" for a graph node, "tool" for a tool called within a node.
+    kind: str = "node"
+    # Parent node name for tools (e.g. "itinerary"); None for nodes.
+    node: str | None = None
 
 
 class MessageOut(BaseModel):
