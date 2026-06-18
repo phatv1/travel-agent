@@ -5,6 +5,7 @@ import { t } from "../lib/i18n"
 
 const props = defineProps<{
   open: boolean
+  width: number
   toolCalls: ToolCall[] | null
 }>()
 
@@ -160,10 +161,9 @@ watch(
 <template>
   <aside
     class="h-full shrink-0 overflow-hidden border-l transition-[width] duration-200"
-    :class="open ? 'w-[22vw] min-w-[240px]' : 'w-0'"
-    :style="{ borderColor: 'var(--border)', background: 'var(--surface)' }"
+    :style="{ width: props.open ? props.width + 'px' : '0px', borderColor: 'var(--border)', background: 'var(--surface)' }"
   >
-    <div v-if="open" class="flex h-full w-[22vw] min-w-[240px] flex-col">
+    <div v-if="open" class="flex h-full flex-col" :style="{ width: props.width + 'px' }">
       <div
         class="flex items-center justify-between border-b px-4 py-3"
         :style="{ borderColor: 'var(--border)' }"

@@ -33,6 +33,12 @@ body,
   margin: 0;
 }
 
+/* Dragging a sidebar edge: kill the open/close width transition so the
+   resize tracks the cursor crisply instead of easing behind it. */
+body.is-resizing * {
+  transition: none !important;
+}
+
 body {
   background: var(--bg);
   color: var(--text);

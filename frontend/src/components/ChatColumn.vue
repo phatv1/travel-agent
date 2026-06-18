@@ -3,8 +3,7 @@ import { ref, watch, nextTick } from "vue"
 import { marked } from "marked"
 import DOMPurify from "dompurify"
 import type { ChatSession } from "../types"
-import { t, locale, setLocale } from "../lib/i18n"
-import { theme, toggleTheme } from "../lib/theme"
+import { t } from "../lib/i18n"
 import InputExpandModal from "./InputExpandModal.vue"
 
 const props = defineProps<{
@@ -17,6 +16,7 @@ const emit = defineEmits<{
   send: [message: string]
   openThinking: [messageId: string]
   toggleSidebar: []
+  openSettings: []
 }>()
 
 const draft = ref("")
@@ -48,10 +48,6 @@ function autoGrow() {
   if (!el) return
   el.style.height = "auto"
   el.style.height = `${Math.min(el.scrollHeight, 200)}px`
-}
-
-function toggleLocale() {
-  setLocale(locale.value === "vi" ? "en" : "vi")
 }
 
 function onExpandClose() {
@@ -86,20 +82,13 @@ watch(
       </div>
       <div class="flex items-center gap-1">
         <button
-          :title="t('toggle_theme_' + (theme === 'dark' ? 'light' : 'dark'))"
+          :title="t('settings')"
+          data-settings-trigger
           class="rounded-lg px-2 py-1 transition hover:bg-[var(--surface-hover)]"
           :style="{ color: 'var(--text)' }"
-          @click="toggleTheme()"
+          @click="emit('openSettings')"
         >
-          {{ theme === "dark" ? "☀️" : "🌙" }}
-        </button>
-        <button
-          :title="locale === 'vi' ? 'Switch to English' : 'Chuyển sang Tiếng Việt'"
-          class="min-w-[2rem] rounded-lg px-2 py-1 text-xs font-semibold transition hover:bg-[var(--surface-hover)]"
-          :style="{ color: 'var(--text)' }"
-          @click="toggleLocale"
-        >
-          {{ locale.toUpperCase() }}
+          ⚙️
         </button>
       </div>
     </header>
@@ -129,7 +118,7 @@ watch(
               :style="{ borderColor: 'var(--border)', color: 'var(--muted)', background: 'var(--surface)' }"
               @click="emit('openThinking', m.id)"
             >
-              {{ t("thinking_btn") }}
+              {{ m.pending ? t("thinking_btn_active") : t("thinking_btn_done") }}
             </button>
 
             <div

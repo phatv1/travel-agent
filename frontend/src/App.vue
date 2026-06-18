@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from "vue"
 import SessionSidebar from "./components/SessionSidebar.vue"
 import ChatColumn from "./components/ChatColumn.vue"
 import ThinkingSidebar from "./components/ThinkingSidebar.vue"
+import SettingsPanel, { type ThinkingDisplay } from "./components/SettingsPanel.vue"
 import Modal from "./components/Modal.vue"
 import * as api from "./lib/api"
 import { uid } from "./lib/api"
@@ -45,13 +46,87 @@ const sessions = ref<ChatSession[]>([])
 const activeId = ref<string | null>(null)
 const sidebarVisible = ref(true)
 const thinkingOpen = ref(false)
+
+// Resizable sidebars. Defaults to 25vw; persisted px in localStorage. Drag
+// bounds [MIN_W, MAX_W] keep them from eating the whole viewport.
+const MIN_W = 180
+function maxW(): number {
+  return Math.floor(window.innerWidth / 2)
+}
+function loadWidth(key: string): number {
+  const stored = Number(localStorage.getItem(`travel-agent-w-${key}`))
+  if (stored > 0) return stored
+  return Math.floor(window.innerWidth * 0.25)
+}
+const sidebarWidth = ref(loadWidth("session"))
+const thinkingWidth = ref(loadWidth("thinking"))
+
+// Drag a sidebar edge: track mouse delta from the start position and clamp.
+// `edge` is which side the handle sits on — "right" (left sidebar) grows with
+// positive dx, "left" (right sidebar) shrinks with positive dx.
+function beginResize(
+  e: MouseEvent,
+  getW: () => number,
+  setW: (w: number) => void,
+  edge: "left" | "right",
+  key: string,
+) {
+  e.preventDefault()
+  const startX = e.clientX
+  const startW = getW()
+  const onMove = (ev: MouseEvent) => {
+    const dx = ev.clientX - startX
+    const raw = edge === "right" ? startW + dx : startW - dx
+    setW(Math.min(maxW(), Math.max(MIN_W, raw)))
+  }
+  const onUp = () => {
+    document.removeEventListener("mousemove", onMove)
+    document.removeEventListener("mouseup", onUp)
+    document.body.style.cursor = ""
+    document.body.style.userSelect = ""
+    document.body.classList.remove("is-resizing")
+    localStorage.setItem(`travel-agent-w-${key}`, String(Math.round(getW())))
+  }
+  document.addEventListener("mousemove", onMove)
+  document.addEventListener("mouseup", onUp)
+  document.body.style.cursor = "col-resize"
+  document.body.style.userSelect = "none"
+  document.body.classList.add("is-resizing")
+}
+
+// Template wrappers: refs auto-unwrap in templates, so we close over them
+// here rather than threading the Ref through beginResize.
+function resizeSession(e: MouseEvent) {
+  beginResize(e, () => sidebarWidth.value, (w) => (sidebarWidth.value = w), "right", "session")
+}
+function resizeThinking(e: MouseEvent) {
+  beginResize(e, () => thinkingWidth.value, (w) => (thinkingWidth.value = w), "left", "thinking")
+}
+
+// Keep widths valid when the window shrinks below a stored value.
+function clampWidths() {
+  const max = maxW()
+  if (sidebarWidth.value > max) sidebarWidth.value = max
+  if (thinkingWidth.value > max) thinkingWidth.value = max
+}
+
 const activeTraceId = ref<string | null>(null)
+const settingsOpen = ref(false)
+// How the thinking sidebar behaves during a turn. "auto" opens on send and
+// closes on done; "manual" never auto-opens or closes (user stays in control).
+const thinkingDisplay = ref<ThinkingDisplay>(
+  (localStorage.getItem("travel-agent-thinking") as ThinkingDisplay | null) ?? "auto",
+)
+function setThinkingDisplay(m: ThinkingDisplay) {
+  thinkingDisplay.value = m
+  localStorage.setItem("travel-agent-thinking", m)
+}
 const loading = ref(false)
 const statusKey = ref("connecting")
 
 type DialogState =
   | { kind: "none" }
-  | { kind: "delete"; id: string; title: string }
+  | { kind: "bulk-delete"; ids: string[] }
   | { kind: "rename"; id: string; title: string }
 const dialog = ref<DialogState>({ kind: "none" })
 const renameValue = ref("")
@@ -66,6 +141,8 @@ const activeToolCalls = computed(() => {
 
 onMounted(async () => {
   applyTheme(theme.value)
+  clampWidths()
+  window.addEventListener("resize", clampWidths)
   try {
     sessions.value = await api.listSessions()
     statusKey.value = "ready"
@@ -96,18 +173,21 @@ async function selectSession(id: string) {
   }
 }
 
-function requestDelete(id: string) {
-  const s = sessions.value.find((x) => x.id === id)
-  dialog.value = { kind: "delete", id, title: s?.title ?? "" }
+function requestBulkDelete(ids: string[]) {
+  if (ids.length === 0) return
+  dialog.value = { kind: "bulk-delete", ids }
 }
 
-async function confirmDelete() {
+async function confirmBulkDelete() {
   const d = dialog.value
-  if (d.kind !== "delete") return
-  await api.deleteSession(d.id)
-  const idx = sessions.value.findIndex((s) => s.id === d.id)
-  if (idx >= 0) sessions.value.splice(idx, 1)
-  if (activeId.value === d.id) activeId.value = sessions.value[0]?.id ?? null
+  if (d.kind !== "bulk-delete") return
+  // Best-effort parallel delete; fine for the personal-session scale.
+  await Promise.all(d.ids.map((id) => api.deleteSession(id)))
+  const remove = new Set(d.ids)
+  sessions.value = sessions.value.filter((s) => !remove.has(s.id))
+  if (activeId.value && remove.has(activeId.value)) {
+    activeId.value = sessions.value[0]?.id ?? null
+  }
   dialog.value = { kind: "none" }
 }
 
@@ -180,7 +260,8 @@ async function send(text: string) {
   if (!assistantMsg.toolCalls) assistantMsg.toolCalls = []
 
   activeTraceId.value = assistantMsg.id
-  thinkingOpen.value = true
+  // Auto mode: pop the thinking sidebar open when the turn starts.
+  if (thinkingDisplay.value === "auto") thinkingOpen.value = true
 
   const realSessionId =
     activeId.value && !activeId.value.startsWith("temp-") ? activeId.value : null
@@ -280,6 +361,9 @@ async function send(text: string) {
           activeId.value = result.sessionId
         }
         statusKey.value = "done"
+        // Auto mode: snap the thinking sidebar shut when the turn ends.
+        // Manual mode leaves it exactly where the user put it.
+        if (thinkingDisplay.value === "auto") thinkingOpen.value = false
       },
     })
   } catch (e) {
@@ -296,13 +380,19 @@ async function send(text: string) {
   <div class="flex h-screen overflow-hidden" :style="{ background: 'var(--bg)' }">
     <SessionSidebar
       v-show="sidebarVisible"
+      :width="sidebarWidth"
       :sessions="sessions"
       :active-id="activeId"
       @select="selectSession"
-      @request-delete="requestDelete"
+      @request-bulk-delete="requestBulkDelete"
       @request-rename="requestRename"
       @new-chat="newChat"
     />
+    <div
+      v-show="sidebarVisible"
+      class="w-1.5 shrink-0 cursor-col-resize bg-[var(--border)] transition-colors hover:bg-[var(--primary)]"
+      @mousedown="resizeSession"
+    ></div>
     <ChatColumn
       :session="activeSession"
       :loading="loading"
@@ -310,23 +400,34 @@ async function send(text: string) {
       @send="send"
       @open-thinking="openThinking"
       @toggle-sidebar="sidebarVisible = !sidebarVisible"
+      @open-settings="settingsOpen = true"
     />
+    <div
+      v-if="thinkingOpen"
+      class="w-1.5 shrink-0 cursor-col-resize bg-[var(--border)] transition-colors hover:bg-[var(--primary)]"
+      @mousedown="resizeThinking"
+    ></div>
     <ThinkingSidebar
       :open="thinkingOpen"
+      :width="thinkingWidth"
       :tool-calls="activeToolCalls"
       @close="thinkingOpen = false"
     />
 
+    <SettingsPanel
+      :open="settingsOpen"
+      :thinking-display="thinkingDisplay"
+      @close="settingsOpen = false"
+      @set-thinking-display="setThinkingDisplay"
+    />
+
     <Modal
-      v-if="dialog.kind === 'delete'"
-      :title="t('confirm_delete_title')"
+      v-if="dialog.kind === 'bulk-delete'"
+      :title="t('confirm_bulk_delete_title')"
       @close="dialog = { kind: 'none' }"
     >
       <p class="text-sm" :style="{ color: 'var(--text)' }">
-        {{ t("confirm_delete_msg") }}
-      </p>
-      <p class="mt-2 truncate text-sm font-medium" :style="{ color: 'var(--muted)' }">
-        {{ dialog.title }}
+        {{ t("confirm_bulk_delete_msg").replace("{n}", String(dialog.ids.length)) }}
       </p>
       <template #footer>
         <button
@@ -338,9 +439,9 @@ async function send(text: string) {
         </button>
         <button
           class="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-700"
-          @click="confirmDelete"
+          @click="confirmBulkDelete"
         >
-          {{ t("delete") }}
+          {{ t("delete") }} ({{ dialog.ids.length }})
         </button>
       </template>
     </Modal>
