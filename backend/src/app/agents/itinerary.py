@@ -148,5 +148,5 @@ def itinerary(state: TravelState) -> dict:
              HumanMessage(content=sched_prompt)],
         )
     except Exception as exc:  # noqa: BLE001
-        return {"errors": [error_label("itinerary", exc)]}
+        return {"errors": (state.get("errors") or []) + [error_label("itinerary", exc)]}
     return {"itinerary": plan.model_dump()}

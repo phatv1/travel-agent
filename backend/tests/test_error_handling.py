@@ -134,9 +134,11 @@ def test_graph_supervisor_failure_short_circuits(monkeypatch) -> None:
     result = graph.invoke({"messages": [HumanMessage(content="gì đây")]})
 
     assert result.get("final_answer")
-    assert "itinerary" not in result
-    assert "recommendations" not in result
-    assert "cost_report" not in result
+    # Supervisor failure short-circuits: no domain agents run, so these stay
+    # blank (the supervisor resets them to {} at turn start). Falsy, not absent.
+    assert not result.get("itinerary")
+    assert not result.get("recommendations")
+    assert not result.get("cost_report")
     assert any("supervisor" in e for e in result.get("errors", []))
 
 

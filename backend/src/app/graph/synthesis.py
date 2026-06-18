@@ -2,7 +2,7 @@
 
 import json
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.llms.factory import get_llm
 from app.schemas.state import TravelState
@@ -88,39 +88,47 @@ def synthesize(state: TravelState) -> dict:
     Four cases: supervisor failure (apology), missing required info (ask to
     clarify), no travel intent / no agent outputs (direct reply), or a travel
     summary aggregated from agent outputs.
+
+    Returns the answer both as ``final_answer`` (for the API/trace) and appended
+    to ``messages`` as an AIMessage. The AIMessage is what the checkpointer
+    persists so the next turn's history contains this assistant reply; without it,
+    only user turns would survive and follow-ups would lose the prior answer's
+    context.
     """
     trip_request = state.get("trip_request")
     if not trip_request:
-        return {"final_answer": _SUPERVISOR_FAILED_MESSAGE}
+        text = _SUPERVISOR_FAILED_MESSAGE
+    else:
+        # Deterministic backstop for the required-minimum contract: the supervisor
+        # is prompted to ask when destination/time are missing, but we don't trust
+        # the LLM. If a required field is still null here AND the user is actually
+        # planning a trip, ask for it instead of presenting a plan on missing info.
+        missing_required = [key for key in _REQUIRED_KEYS if not trip_request.get(key)]
+        if missing_required and any(trip_request.get(f) for f in _TRAVEL_INTENT_FIELDS):
+            text = _clarify_message(trip_request)
+        elif not any(
+            state.get(k) for k in ("itinerary", "recommendations", "cost_report")
+        ):
+            text = _direct_answer(state)
+        else:
+            context = {
+                "trip_request": state.get("trip_request") or {},
+                "itinerary": state.get("itinerary") or {},
+                "recommendations": state.get("recommendations") or {},
+                "cost_report": state.get("cost_report") or {},
+            }
+            content = get_llm().invoke(
+                [
+                    SystemMessage(_SYSTEM_PROMPT),
+                    HumanMessage(content=json.dumps(context, ensure_ascii=False, indent=2)),
+                ]
+            ).content
+            text = content if isinstance(content, str) else str(content)
 
-    # Deterministic backstop for the required-minimum contract: the supervisor is
-    # prompted to ask when destination/time are missing, but we don't trust the LLM.
-    # If a required field is still null here AND the user is actually planning a
-    # trip, ask for it instead of presenting a plan built on missing info.
-    missing_required = [key for key in _REQUIRED_KEYS if not trip_request.get(key)]
-    if missing_required and any(trip_request.get(f) for f in _TRAVEL_INTENT_FIELDS):
-        return {"final_answer": _clarify_message(trip_request)}
+            errors = state.get("errors") or []
+            if errors:
+                # error_label format is "node: Type: msg"; take the node name.
+                failed = ", ".join(e.split(":", 1)[0] for e in errors)
+                text = f"{text.rstrip()}\n\n*Lưu ý: một số phần chưa tạo được ({failed}).*"
 
-    if not any(state.get(k) for k in ("itinerary", "recommendations", "cost_report")):
-        return {"final_answer": _direct_answer(state)}
-
-    context = {
-        "trip_request": state.get("trip_request") or {},
-        "itinerary": state.get("itinerary") or {},
-        "recommendations": state.get("recommendations") or {},
-        "cost_report": state.get("cost_report") or {},
-    }
-    content = get_llm().invoke(
-        [
-            SystemMessage(_SYSTEM_PROMPT),
-            HumanMessage(content=json.dumps(context, ensure_ascii=False, indent=2)),
-        ]
-    ).content
-    text = content if isinstance(content, str) else str(content)
-
-    errors = state.get("errors") or []
-    if errors:
-        # error_label format is "node: Type: msg"; take the node name.
-        failed = ", ".join(e.split(":", 1)[0] for e in errors)
-        text = f"{text.rstrip()}\n\n*Lưu ý: một số phần chưa tạo được ({failed}).*"
-    return {"final_answer": text}
+    return {"final_answer": text, "messages": [AIMessage(content=text)]}

@@ -32,8 +32,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from langchain_core.messages import HumanMessage
-
-from app.graph.builder import build_travel_graph
+from langgraph.graph.state import CompiledStateGraph
 
 # Node display metadata — single source of truth for labels/icons, shared with
 # the non-streaming trace fallback (graph/trace.py).
@@ -51,9 +50,6 @@ _ANSWER_NODES = {"synthesize"}
 
 # Framework wrapper names to ignore when filtering node chain events.
 _FRAMEWORK_WRAPPERS = {"LangGraph", "RunnableSequence", "RunnableParallel"}
-
-# Compiled once at import; reused across requests.
-_travel_graph = build_travel_graph()
 
 
 def _safe_jsonable(value: Any) -> Any:
@@ -95,12 +91,20 @@ def _extract_final_answer(node_output: Any) -> str | None:
     return answer if isinstance(answer, str) and answer else None
 
 
-async def stream_travel(message: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
+async def stream_travel(
+    graph: CompiledStateGraph,
+    message: str,
+    thread_id: str,
+) -> AsyncIterator[tuple[str, dict[str, Any]]]:
     """Run the graph and yield ``(event_type, payload)`` tuples as events arrive.
 
     Only nodes/tools that actually run are yielded, in execution order, with
     their real inputs and the state delta they produce — so the UI shows the
     genuine reasoning trace rather than a mocked timeline.
+
+    ``thread_id`` (= session_id) keys the checkpointer so the full TravelState —
+    including message history — persists across turns, giving the supervisor the
+    prior conversation when resolving follow-ups.
     """
     inputs = {"messages": [HumanMessage(content=message)]}
     started_nodes: set[str] = set()
@@ -110,7 +114,11 @@ async def stream_travel(message: str) -> AsyncIterator[tuple[str, dict[str, Any]
     final_answer: str | None = None
 
     try:
-        async for ev in _travel_graph.astream_events(inputs, version="v2"):
+        async for ev in graph.astream_events(
+            inputs,
+            version="v2",
+            config={"configurable": {"thread_id": thread_id}},
+        ):
             kind = ev["event"]
             name = ev.get("name", "")
             node = ev.get("metadata", {}).get("langgraph_node")

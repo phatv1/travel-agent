@@ -1,5 +1,4 @@
 import typing
-from operator import add
 
 from langgraph.graph.message import add_messages
 
@@ -28,17 +27,20 @@ def test_messages_reducer_inherited_into_travel_state() -> None:
     assert typing.get_args(hints["messages"])[1:] == (add_messages,)
 
 
-def test_errors_uses_accumulating_reducer() -> None:
-    # Multiple nodes write errors, so it must accumulate (not last-writer-wins).
+def test_errors_is_last_write_wins() -> None:
+    # errors has no reducer (plain list[str]). Nodes accumulate manually within a
+    # turn (read + append), and the supervisor resets it to [] at turn start, so
+    # failures never leak across turns via the checkpointer. A reducer would
+    # accumulate across turns and pollute later answers.
     hints = typing.get_type_hints(TravelState, include_extras=True)
-    assert typing.get_args(hints["errors"])[1:] == (add,)
+    assert hints["errors"] == list[str]
 
 
 def test_output_state_exposes_errors_but_keeps_internals_private() -> None:
     hints = typing.get_type_hints(OutputState, include_extras=True)
     # errors is surfaced to consumers for graceful partial-failure display.
     assert "errors" in hints
-    assert typing.get_args(hints["errors"])[1:] == (add,)
+    assert hints["errors"] == list[str]
     # trip_request is internal-only; messages lives in InputState to avoid a
     # Required/NotRequired clash.
     assert "trip_request" not in hints

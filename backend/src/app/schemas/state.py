@@ -1,5 +1,4 @@
 from enum import StrEnum
-from operator import add
 from typing import Annotated, Any, Literal, TypedDict
 
 from langgraph.graph.message import AnyMessage, add_messages
@@ -34,7 +33,10 @@ class OutputState(TypedDict, total=False):
     """External graph output returned to API/frontend consumers.
 
     `errors` is surfaced here (not internal-only) so the API/frontend can show
-    graceful partial-failure info instead of a flat 500.
+    graceful partial-failure info instead of a flat 500. It is last-write-wins
+    (no reducer): nodes manually accumulate within a turn (read state['errors'],
+    append, return), and the supervisor resets it to [] at the start of each turn
+    so failures don't leak across turns when a checkpointer is attached.
     """
 
     # messages lives in InputState only; redeclaring here (total=False)
@@ -45,15 +47,15 @@ class OutputState(TypedDict, total=False):
 
     final_answer: str
 
-    errors: Annotated[list[str], add]
+    errors: list[str]
 
 
 class TravelState(InputState, OutputState, total=False):
     """Full internal LangGraph state.
 
-    Reducers: messages uses add_messages; errors accumulates via operator.add
-    (inherited from OutputState, written by multiple nodes); domain fields are
-    last-write-wins.
+    Reducers: messages uses add_messages; errors is last-write-wins (nodes
+    accumulate manually within a turn, supervisor resets at turn start);
+    trip_request + domain fields are last-write-wins.
     """
 
     trip_request: TripRequestState

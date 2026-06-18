@@ -29,7 +29,7 @@ def _next_step(
     return Command(goto=plan[idx], update={"step_index": idx + 1})
 
 
-def build_travel_graph():
+def build_travel_graph(checkpointer=None):
     """Compile the travel graph.
 
     supervisor -> router -> itinerary/recommendation/cost (looped via router)
@@ -37,6 +37,10 @@ def build_travel_graph():
 
     The router follows every node, so all multi-agent orchestration is driven by
     the supervisor's ordered plan from one place.
+
+    ``checkpointer`` enables multi-turn memory: when set, pass
+    ``config={"configurable": {"thread_id": session_id}}`` on every invoke so
+    the full TravelState (incl. message history) persists across turns.
     """
     graph = StateGraph(TravelState, input_schema=InputState, output_schema=OutputState)
     graph.add_node("supervisor", supervisor)
@@ -51,4 +55,4 @@ def build_travel_graph():
     for src in ("itinerary", "recommendation", "cost"):
         graph.add_edge(src, "router")
     graph.add_edge("synthesize", END)
-    return graph.compile()
+    return graph.compile(checkpointer=checkpointer)

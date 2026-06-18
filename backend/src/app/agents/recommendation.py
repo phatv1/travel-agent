@@ -103,5 +103,5 @@ def recommendation(state: TravelState) -> dict:
             [SystemMessage(_SYNTHESIZE_PROMPT), HumanMessage(content=final_prompt)],
         )
     except Exception as exc:  # noqa: BLE001
-        return {"errors": [error_label("recommendation", exc)]}
+        return {"errors": (state.get("errors") or []) + [error_label("recommendation", exc)]}
     return {"recommendations": plan.model_dump()}

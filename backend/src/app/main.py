@@ -8,7 +8,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
+from app.graph.builder import build_travel_graph
 from app.graph.runner import run_travel
 from app.graph.stream import stream_travel
 from app.graph.trace import build_trace
@@ -17,10 +19,24 @@ from app.schemas.api import ChatRequest, ChatResponse
 from app.schemas.session import SessionDetail, SessionSummary, SessionTitleUpdate
 
 
+def _checkpoint_db_path() -> str:
+    # Separate from the sessions DB: the checkpoint store owns its own schema
+    # (checkpoints/writes/migrations) and lifecycle, so keeping it isolated
+    # avoids coupling conversation memory to message persistence.
+    return os.environ.get("TRAVEL_CHECKPOINT_DB_PATH", "checkpoint.sqlite3")
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     sessions_repo.init_db()
-    yield
+    # Build the graph once with an async SQLite checkpointer. thread_id
+    # (= session_id, passed per request) keys multi-turn memory: the full
+    # TravelState, including message history, persists across turns so the
+    # supervisor can resolve follow-ups against the prior conversation.
+    async with AsyncSqliteSaver.from_conn_string(_checkpoint_db_path()) as saver:
+        await saver.setup()
+        app.state.travel_graph = build_travel_graph(checkpointer=saver)
+        yield
 
 
 app = FastAPI(title="Travel Agent API", lifespan=lifespan)
@@ -99,6 +115,8 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
     sessions_repo.add_message(session_id, role="user", content=request.message)
     sessions_repo.autotitle_if_default(session_id, request.message)
 
+    graph = app.state.travel_graph
+
     async def _generate() -> AsyncIterator[str]:
         def sse(event: str, payload: dict) -> str:
             body = json.dumps(payload, ensure_ascii=False, default=str)
@@ -113,7 +131,7 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
         final_answer = ""
         error_msg: str | None = None
 
-        async for etype, payload in stream_travel(request.message):
+        async for etype, payload in stream_travel(graph, request.message, session_id):
             yield sse(etype, payload)
 
             if etype == "node_start":
@@ -203,7 +221,8 @@ async def chat(request: ChatRequest) -> ChatResponse:
     sessions_repo.add_message(session_id, role="user", content=request.message)
     sessions_repo.autotitle_if_default(session_id, request.message)
 
-    result = await run_travel(request.message)
+    graph = app.state.travel_graph
+    result = await run_travel(graph, request.message, session_id)
     errors = result.get("errors")
     trace = build_trace(request.message, result)
     assistant = sessions_repo.add_message(

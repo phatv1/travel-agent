@@ -1,13 +1,17 @@
 """Run the travel graph for a single chat request."""
 
 from langchain_core.messages import HumanMessage
-
-from app.graph.builder import build_travel_graph
-
-# Compiled once at import; reuse across requests.
-_travel_graph = build_travel_graph()
+from langgraph.graph.state import CompiledStateGraph
 
 
-async def run_travel(message: str) -> dict:
-    """Invoke the travel graph and return the OutputState-shaped result."""
-    return await _travel_graph.ainvoke({"messages": [HumanMessage(content=message)]})
+async def run_travel(graph: CompiledStateGraph, message: str, thread_id: str) -> dict:
+    """Invoke the graph and return the OutputState-shaped result.
+
+    ``thread_id`` (= session_id) keys the checkpointer so the full TravelState —
+    including message history — persists across turns, giving the supervisor the
+    prior conversation when resolving follow-ups.
+    """
+    return await graph.ainvoke(
+        {"messages": [HumanMessage(content=message)]},
+        config={"configurable": {"thread_id": thread_id}},
+    )

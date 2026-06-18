@@ -146,7 +146,7 @@ def cost(state: TravelState) -> dict:
             llm, CostReport, [SystemMessage(_SYNTHESIZE_PROMPT), HumanMessage(content=final_prompt)]
         )
     except Exception as exc:  # noqa: BLE001
-        return {"errors": [error_label("cost", exc)]}
+        return {"errors": (state.get("errors") or []) + [error_label("cost", exc)]}
 
     report = _finalize(report, trip_request)
     return {"cost_report": report.model_dump()}
