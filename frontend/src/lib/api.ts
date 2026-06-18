@@ -10,10 +10,12 @@ interface SessionSummaryDTO {
 interface ToolCallDTO {
   name: string
   label: string
-  icon: string
+  icon?: string
   status: string
   input: unknown
   output?: unknown
+  kind?: string
+  node?: string | null
 }
 
 interface MessageDTO {
@@ -50,16 +52,18 @@ function mapStatus(s: string): ToolCallStatus {
 function toToolCalls(items?: ToolCallDTO[] | null): ToolCall[] | undefined {
   if (!items) return undefined
   const base = Date.now()
-  return items.map((t, i) => ({
+  return items.map((it, i) => ({
     id: `srv-${base}-${toolCounter++}`,
-    name: t.name,
-    label: t.label,
-    icon: t.icon,
-    input: t.input,
-    output: t.output,
-    status: mapStatus(t.status),
+    kind: (it.kind === "tool" ? "tool" : "node") as ToolCall["kind"],
+    name: it.name,
+    label: it.label,
+    icon: it.icon ?? (it.kind === "tool" ? "🔧" : "·"),
+    node: it.node ?? undefined,
+    input: it.input,
+    output: it.output,
+    status: mapStatus(it.status),
     startedAt: base - (items.length - i),
-    finishedAt: mapStatus(t.status) === "done" ? base : undefined,
+    finishedAt: mapStatus(it.status) === "done" ? base : undefined,
   }))
 }
 
@@ -125,7 +129,7 @@ export interface ChatResult {
   assistant: ChatMessage
 }
 
-export async function chat(message: string, sessionId: string | null): Promise<ChatResult> {
+async function chat(message: string, sessionId: string | null): Promise<ChatResult> {
   const data = (await (
     await req("/chat", {
       method: "POST",
@@ -144,3 +148,148 @@ export async function chat(message: string, sessionId: string | null): Promise<C
     },
   }
 }
+
+/** SSE event → callback. Empty string event name = comment/heartbeat. */
+export interface StreamHandlers {
+  onSession?: (sessionId: string) => void
+  onPlan?: (route: { name: string; label: string; icon: string }[]) => void
+  onNodeStart?: (name: string, label: string, icon: string) => void
+  onNodeEnd?: (name: string, output: unknown) => void
+  onLlmStart?: (node: string | undefined) => void
+  onLlmEnd?: (node: string | undefined) => void
+  onReasoning?: (node: string | undefined, text: string) => void
+  onToolStart?: (node: string | undefined, name: string, input: unknown) => void
+  onToolEnd?: (node: string | undefined, name: string, output: unknown) => void
+  onToken?: (text: string) => void
+  onError?: (message: string) => void
+  onDone?: (result: {
+    sessionId: string
+    messageId: string
+    finalAnswer: string
+    errors: string[] | null
+  }) => void
+}
+
+// Backend base for SSE — the Vite proxy buffers text/event-stream, so the
+// frontend reads the stream directly from FastAPI (CORS-enabled in dev).
+const STREAM_BASE =
+  (import.meta.env.VITE_STREAM_BASE as string | undefined) ?? "http://127.0.0.1:8000"
+
+let streamCounter = 0
+function uid(): string {
+  return `ev-${Date.now()}-${streamCounter++}`
+}
+
+/** Stream /chat/stream, dispatching each SSE event to the matching handler.
+ *
+ * Uses fetch + a ReadableStream reader (EventSource is GET-only and can't POST
+ * the message body). Parses the SSE wire format manually: `event:` / `data:`
+ * lines delimited by blank lines.
+ */
+export async function streamChat(
+  message: string,
+  sessionId: string | null,
+  h: StreamHandlers,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`${STREAM_BASE}/chat/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, session_id: sessionId }),
+    signal,
+  })
+  if (!res.ok || !res.body) throw new Error(`Lỗi máy chủ (${res.status})`)
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ""
+  let eventType = ""
+  let dataLines: string[] = []
+
+  const dispatch = () => {
+    if (dataLines.length === 0) return
+    const raw = dataLines.join("\n")
+    dataLines = []
+    const et = eventType
+    eventType = ""
+    if (!et) return // comment/heartbeat
+    let payload: Record<string, unknown> = {}
+    try {
+      payload = raw ? JSON.parse(raw) : {}
+    } catch {
+      return
+    }
+    switch (et) {
+      case "session":
+        h.onSession?.(payload.session_id as string)
+        break
+      case "plan":
+        h.onPlan?.(payload.route as { name: string; label: string; icon: string }[])
+        break
+      case "node_start":
+        h.onNodeStart?.(
+          payload.name as string,
+          payload.label as string,
+          payload.icon as string,
+        )
+        break
+      case "node_end":
+        h.onNodeEnd?.(payload.name as string, payload.output)
+        break
+      case "llm_start":
+        h.onLlmStart?.(payload.node as string | undefined)
+        break
+      case "llm_end":
+        h.onLlmEnd?.(payload.node as string | undefined)
+        break
+      case "reasoning":
+        h.onReasoning?.(payload.node as string | undefined, payload.text as string)
+        break
+      case "tool_start":
+        h.onToolStart?.(payload.node as string | undefined, payload.name as string, payload.input)
+        break
+      case "tool_end":
+        h.onToolEnd?.(payload.node as string | undefined, payload.name as string, payload.output)
+        break
+      case "token":
+        h.onToken?.(payload.text as string)
+        break
+      case "error":
+        h.onError?.(payload.message as string)
+        break
+      case "done":
+        h.onDone?.({
+          sessionId: payload.session_id as string,
+          messageId: payload.message_id as string,
+          finalAnswer: (payload.final_answer as string) ?? "",
+          errors: (payload.errors as string[] | null) ?? null,
+        })
+        break
+    }
+  }
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+
+    let idx: number
+    // SSE frames are separated by a blank line.
+    while ((idx = buffer.indexOf("\n\n")) >= 0) {
+      const frame = buffer.slice(0, idx)
+      buffer = buffer.slice(idx + 2)
+      for (const line of frame.split("\n")) {
+        if (line.startsWith("event:")) {
+          eventType = line.slice(6).trim()
+        } else if (line.startsWith("data:")) {
+          dataLines.push(line.slice(5).replace(/^ /, ""))
+        }
+      }
+      dispatch()
+    }
+  }
+  dispatch() // flush any trailing partial frame
+}
+
+export { chat, uid }

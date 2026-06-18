@@ -5,13 +5,40 @@ import ChatColumn from "./components/ChatColumn.vue"
 import ThinkingSidebar from "./components/ThinkingSidebar.vue"
 import Modal from "./components/Modal.vue"
 import * as api from "./lib/api"
-import { buildToolCalls } from "./lib/toolCalls"
+import { uid } from "./lib/api"
 import { t } from "./lib/i18n"
 import { applyTheme, theme } from "./lib/theme"
-import type { ChatMessage, ChatSession } from "./types"
+import type { ChatMessage, ChatSession, ToolCall } from "./types"
 
-function uid(): string {
-  return crypto?.randomUUID?.() ?? `id-${Date.now()}-${Math.random().toString(36).slice(2)}`
+function makeNode(
+  name: string,
+  label: string,
+  icon: string,
+): ToolCall {
+  return {
+    id: uid(),
+    kind: "node",
+    name,
+    label,
+    icon,
+    input: {},
+    status: "running",
+    startedAt: Date.now(),
+  }
+}
+
+function makeTool(node: string | undefined, name: string, input: unknown): ToolCall {
+  return {
+    id: uid(),
+    kind: "tool",
+    node,
+    name,
+    label: name,
+    icon: "🔧",
+    input,
+    status: "running",
+    startedAt: Date.now(),
+  }
 }
 
 const sessions = ref<ChatSession[]>([])
@@ -116,12 +143,13 @@ async function send(text: string) {
 
   const now = Date.now()
   const userMsg: ChatMessage = { id: uid(), role: "user", content: text, createdAt: now }
-  const assistantMsg: ChatMessage = {
+  // Declared `let`: reassigned below to the reactive proxy after insertion.
+  let assistantMsg: ChatMessage = {
     id: uid(),
     role: "assistant",
     content: "",
     pending: true,
-    toolCalls: buildToolCalls(text),
+    toolCalls: [],
     createdAt: now,
   }
 
@@ -140,27 +168,120 @@ async function send(text: string) {
     activeId.value = tempId
   }
 
+  // Re-acquire the assistant message THROUGH the reactive store. The plain
+  // `assistantMsg` above is stored raw by Vue's reactive proxy and wrapped
+  // lazily on read — so the local var is the non-reactive original, and
+  // mutating it directly (content, toolCalls) bypasses the proxy and triggers
+  // no updates (hence "must close/reopen to see changes"). Reading it back
+  // via the reactive computed yields the proxy, whose mutations track.
+  const session = activeSession.value
+  const reactiveMsg = session?.messages[session.messages.length - 1]
+  if (reactiveMsg) assistantMsg = reactiveMsg
+  if (!assistantMsg.toolCalls) assistantMsg.toolCalls = []
+
   activeTraceId.value = assistantMsg.id
   thinkingOpen.value = true
 
   const realSessionId =
     activeId.value && !activeId.value.startsWith("temp-") ? activeId.value : null
+  const trace = assistantMsg.toolCalls as ToolCall[]
+
+  // Mark the most recent running node/tool of a given name as done. Events
+  // arrive in order, so reverse-search finds the matching open step.
+  const complete = (predicate: (s: ToolCall) => boolean, output: unknown) => {
+    for (let i = trace.length - 1; i >= 0; i--) {
+      if (predicate(trace[i]) && trace[i].status === "running") {
+        trace[i].status = "done"
+        trace[i].output = output
+        trace[i].finishedAt = Date.now()
+        trace[i].thinking = false // clear even if an llm_end was missed
+        return
+      }
+    }
+  }
 
   try {
-    const result = await api.chat(text, realSessionId)
-    if (!realSessionId) {
-      const full = await api.getSession(result.sessionId)
-      const idx = sessions.value.findIndex((s) => s.id === `temp-${now}`)
-      if (full && idx >= 0) {
-        sessions.value[idx] = full
-        activeId.value = result.sessionId
-      }
-    } else {
-      assistantMsg.content = result.assistant.content
-      assistantMsg.toolCalls = result.assistant.toolCalls
-      assistantMsg.pending = false
-    }
-    statusKey.value = "done"
+    await api.streamChat(text, realSessionId, {
+      onSession: () => {
+        statusKey.value = "streaming"
+      },
+      onNodeStart: (name, label, icon) => {
+        trace.push(makeNode(name, label, icon))
+      },
+      onNodeEnd: (name, output) => {
+        complete((s) => s.kind === "node" && s.name === name, output)
+        // Supervisor's output carries the parsed trip_request — surface it.
+        if (name === "supervisor") {
+          const out = output as { trip_request?: unknown } | null
+          const sup = trace.find((s) => s.kind === "node" && s.name === "supervisor")
+          if (sup) sup.output = out
+        }
+      },
+      onLlmStart: (node) => {
+        const n = trace.find(
+          (s) => s.kind === "node" && s.name === node && s.status === "running",
+        )
+        if (n) {
+          n.thinking = true
+          n.llmCalls = (n.llmCalls ?? 0) + 1
+        }
+      },
+      onLlmEnd: (node) => {
+        const n = trace.find(
+          (s) => s.kind === "node" && s.name === node && s.status === "running",
+        )
+        if (n) n.thinking = false
+      },
+      onReasoning: (node, text) => {
+        const n = trace.find(
+          (s) => s.kind === "node" && s.name === node && s.status === "running",
+        )
+        if (n) n.reasoning = (n.reasoning ?? "") + text
+      },
+      onToolStart: (node, name, input) => {
+        trace.push(makeTool(node, name, input))
+      },
+      onToolEnd: (node, name, output) => {
+        complete((s) => s.kind === "tool" && s.name === name && s.node === node, output)
+      },
+      onToken: (tok) => {
+        assistantMsg.content += tok
+      },
+      onError: (message) => {
+        assistantMsg.error = message
+      },
+      onDone: (result) => {
+        // Authoritative answer (covers clarify/no-token paths where tokens
+        // didn't stream).
+        assistantMsg.content = result.finalAnswer || assistantMsg.content
+        assistantMsg.id = result.messageId
+        // Keep the sidebar target in sync: the id just changed from the
+        // client uuid to the backend message id, so activeTraceId (set at
+        // send() start to the old id) must follow or the thinking panel loses
+        // its target and shows "no tool calls" until the user clicks again.
+        activeTraceId.value = result.messageId
+        assistantMsg.pending = false
+        // Promote any still-running steps to done (defensive; should be none).
+        for (const s of trace) {
+          if (s.status === "running") {
+            s.status = "done"
+            s.thinking = false
+            s.finishedAt = Date.now()
+          }
+        }
+        // Bind the temp session to the real id. The temp session was already
+        // unshifted into the sidebar list at send() start, so mutating its id
+        // in place is enough — no list refresh (summaries carry no messages,
+        // which would wipe the in-memory chat we just streamed).
+        const idx = sessions.value.findIndex((s) => s.id === `temp-${now}`)
+        if (idx >= 0) {
+          sessions.value[idx].id = result.sessionId
+          sessions.value[idx].updatedAt = Date.now()
+          activeId.value = result.sessionId
+        }
+        statusKey.value = "done"
+      },
+    })
   } catch (e) {
     assistantMsg.pending = false
     assistantMsg.error = e instanceof Error ? e.message : t("error_state")

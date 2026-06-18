@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { ref } from "vue"
+import { computed, h, defineComponent, ref, watch, nextTick } from "vue"
 import type { ToolCall } from "../types"
 import { t } from "../lib/i18n"
 
-defineProps<{
+const props = defineProps<{
   open: boolean
   toolCalls: ToolCall[] | null
 }>()
@@ -11,6 +11,8 @@ defineProps<{
 const emit = defineEmits<{ close: [] }>()
 
 const expanded = ref<Set<string>>(new Set())
+const reasonExpanded = ref<Set<string>>(new Set())
+const scrollEl = ref<HTMLDivElement | null>(null)
 
 function toggle(id: string) {
   const next = new Set(expanded.value)
@@ -19,26 +21,160 @@ function toggle(id: string) {
   expanded.value = next
 }
 
+function toggleReason(id: string) {
+  const next = new Set(reasonExpanded.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  reasonExpanded.value = next
+}
+
 function formatJson(v: unknown): string {
-  if (v === undefined) return t("status_running") + "..."
+  if (v === undefined || v === null) return ""
   try {
     return JSON.stringify(v, null, 2)
   } catch {
     return String(v)
   }
 }
+
+// Compact "key=value" rendering of a tool's input for the collapsed tool header.
+function formatToolArgs(input: unknown): string {
+  if (!input || typeof input !== "object") return ""
+  return Object.entries(input as Record<string, unknown>)
+    .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+    .join(", ")
+}
+
+function elapsed(s: ToolCall): string {
+  if (!s.finishedAt) return ""
+  const ms = s.finishedAt - s.startedAt
+  if (ms < 1000) return `${ms}ms`
+  return `${(ms / 1000).toFixed(1)}s`
+}
+
+// Local icon/label maps so the pipeline renders before any event arrives and
+// covers the synthesize terminal step. Kept in sync with backend NODE_META.
+const NODE_ICON: Record<string, string> = {
+  supervisor: "🧭",
+  itinerary: "🗺️",
+  recommendation: "🏨",
+  cost: "💰",
+  synthesize: "✨",
+}
+const NODE_LABEL: Record<string, string> = {
+  supervisor: "Phân tích",
+  itinerary: "Lịch trình",
+  recommendation: "Lưu trú",
+  cost: "Chi phí",
+  synthesize: "Tổng hợp",
+}
+
+// Inline status badge (tiny, kept local to the showcase).
+const StatusBadge = defineComponent({
+  props: { status: { type: String, required: true } },
+  setup(p) {
+    return () =>
+      h(
+        "span",
+        {
+          class: "rounded-full px-2 py-0.5 text-[10px] font-semibold",
+          style:
+            p.status === "done"
+              ? { background: "rgba(21,128,61,0.15)", color: "#15803d" }
+              : p.status === "error"
+                ? { background: "rgba(185,28,28,0.15)", color: "#b91c1c" }
+                : { background: "rgba(180,83,9,0.15)", color: "#b45309" },
+        },
+        t(`status_${p.status}`),
+      )
+  },
+})
+
+// Nodes only — drive the pipeline and the parsed-request card.
+const nodes = computed(() => (props.toolCalls ?? []).filter((s) => s.kind === "node"))
+
+// Pipeline route from the supervisor's output plan; steps light up as they run.
+const pipeline = computed(() => {
+  const sup = nodes.value.find((n) => n.name === "supervisor")
+  const out = (sup?.output ?? {}) as { plan?: string[] }
+  const order = ["supervisor", ...(out.plan ?? []), "synthesize"]
+  return order
+    .filter((n, i, arr) => n in NODE_ICON && arr.indexOf(n) === i)
+    .map((name) => {
+      const step = nodes.value.find((n) => n.name === name)
+      return {
+        name,
+        icon: NODE_ICON[name] ?? "·",
+        label: NODE_LABEL[name] ?? name,
+        status: step?.status ?? "pending",
+      }
+    })
+})
+
+// Parsed request fields the LLM extracted (from the supervisor's trip_request).
+const parsedRequest = computed<[string, unknown][] | null>(() => {
+  const sup = nodes.value.find((n) => n.name === "supervisor")
+  const tr = ((sup?.output ?? {}) as { trip_request?: Record<string, unknown> }).trip_request
+  if (!tr) return null
+  const rows: [string, string][] = [
+    ["destination", "📍 Điểm đến"],
+    ["time_preference", "📅 Thời gian"],
+    ["origin", "🛫 Đi từ"],
+    ["budget_preference", "💰 Ngân sách"],
+    ["companions", "👥 Số người"],
+    ["preferences", "🎯 Sở thích"],
+  ]
+  return rows
+    .map(([k, lbl]) => [lbl, tr[k]] as [string, unknown])
+    .filter(([, v]) => v !== null && v !== "" && v !== undefined)
+})
+
+const anyRunning = computed(
+  () => (props.toolCalls ?? []).some((s) => s.status === "running"),
+)
+
+// Auto-scroll the live reasoning preview to its latest line as tokens stream.
+// Sum of all reasoning lengths is a cheap signal that fires on every token.
+const reasoningSig = computed(() =>
+  (props.toolCalls ?? []).reduce((a, s) => a + (s.reasoning?.length ?? 0), 0),
+)
+watch(reasoningSig, async () => {
+  await nextTick()
+  const els = document.querySelectorAll("[data-reasoning-pre]")
+  if (els.length) {
+    const el = els[els.length - 1] as HTMLElement
+    el.scrollTop = el.scrollHeight
+  }
+})
+
+// Auto-scroll to the latest step as the trace grows.
+watch(
+  () => props.toolCalls?.length,
+  async () => {
+    await nextTick()
+    if (scrollEl.value) scrollEl.value.scrollTop = scrollEl.value.scrollHeight
+  },
+)
 </script>
 
 <template>
   <aside
     class="h-full shrink-0 overflow-hidden border-l transition-[width] duration-200"
-    :class="open ? 'w-[20vw] min-w-[200px]' : 'w-0'"
+    :class="open ? 'w-[22vw] min-w-[240px]' : 'w-0'"
     :style="{ borderColor: 'var(--border)', background: 'var(--surface)' }"
   >
-    <div v-if="open" class="flex h-full w-[20vw] min-w-[200px] flex-col">
-      <div class="flex items-center justify-between border-b px-4 py-3" :style="{ borderColor: 'var(--border)' }">
-        <h2 class="text-sm font-semibold" :style="{ color: 'var(--text)' }">
+    <div v-if="open" class="flex h-full w-[22vw] min-w-[240px] flex-col">
+      <div
+        class="flex items-center justify-between border-b px-4 py-3"
+        :style="{ borderColor: 'var(--border)' }"
+      >
+        <h2 class="flex items-center gap-1.5 text-sm font-semibold" :style="{ color: 'var(--text)' }">
           🧠 {{ t("thinking") }}
+          <span
+            v-if="anyRunning"
+            class="ml-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full"
+            :style="{ background: 'var(--primary)' }"
+          ></span>
         </h2>
         <button
           :title="t('close')"
@@ -50,7 +186,7 @@ function formatJson(v: unknown): string {
         </button>
       </div>
 
-      <div class="flex-1 overflow-y-auto px-3 py-3">
+      <div ref="scrollEl" class="flex-1 overflow-y-auto px-3 py-3">
         <div
           v-if="!toolCalls || toolCalls.length === 0"
           class="px-2 py-8 text-center text-sm"
@@ -58,61 +194,147 @@ function formatJson(v: unknown): string {
         >
           {{ t("no_tool_calls") }}
         </div>
-        <div v-else class="flex flex-col gap-2">
-          <div
-            v-for="tc in toolCalls"
-            :key="tc.id"
-            class="rounded-xl border border-l-[3px]"
-            :style="{
-              borderColor: 'var(--border)',
-              borderLeftColor: 'var(--primary)',
-              background: 'var(--surface)',
-            }"
-          >
-            <div class="flex items-center gap-2 px-3 py-2">
-              <span class="text-base">{{ tc.icon }}</span>
-              <div class="min-w-0 flex-1">
-                <div class="text-sm font-medium" :style="{ color: 'var(--text)' }">{{ tc.label }}</div>
-                <div class="font-mono text-[11px]" :style="{ color: 'var(--muted)' }">{{ tc.name }}</div>
-              </div>
-              <span
-                class="rounded-full px-2 py-0.5 text-[10px] font-semibold"
-                :style="
-                  tc.status === 'done'
-                    ? { background: 'rgba(21,128,61,0.15)', color: '#15803d' }
-                    : tc.status === 'error'
-                      ? { background: 'rgba(185,28,28,0.15)', color: '#b91c1c' }
-                      : { background: 'rgba(180,83,9,0.15)', color: '#b45309' }
-                "
-              >
-                {{ t("status_" + tc.status) }}
-              </span>
-            </div>
 
-            <div class="border-t px-3 py-2" :style="{ borderColor: 'var(--border)' }">
-              <div class="mb-1 text-[11px] font-semibold uppercase" :style="{ color: 'var(--muted)' }">Input</div>
-              <pre
-                class="overflow-x-auto rounded-lg p-2 text-[11px]"
-                :style="{ background: 'var(--surface-hover)', color: 'var(--text)' }"
-              >{{ formatJson(tc.input) }}</pre>
+        <template v-else>
+          <!-- Pipeline: the LLM's planned route, lighting up as steps run -->
+          <div v-if="pipeline.length > 0" class="mb-3">
+            <div class="mb-1.5 text-[11px] font-semibold uppercase" :style="{ color: 'var(--muted)' }">
+              {{ t("plan_label") }}
             </div>
-
-            <div v-if="tc.status === 'done'" class="px-3 pb-2">
-              <button
-                class="text-[11px] font-medium transition hover:opacity-70"
-                :style="{ color: 'var(--primary)' }"
-                @click="toggle(tc.id)"
-              >
-                {{ expanded.has(tc.id) ? `▾ ${t("hide_output")}` : `▸ ${t("show_output")}` }}
-              </button>
-              <pre
-                v-if="expanded.has(tc.id)"
-                class="mt-1 max-h-64 overflow-auto rounded-lg p-2 text-[11px]"
-                :style="{ background: 'var(--surface-hover)', color: 'var(--text)' }"
-              >{{ formatJson(tc.output) }}</pre>
+            <div class="flex flex-wrap items-center gap-1">
+              <template v-for="(p, i) in pipeline" :key="p.name">
+                <div
+                  class="flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium transition"
+                  :style="
+                    p.status === 'done'
+                      ? { background: 'rgba(21,128,61,0.15)', color: '#15803d' }
+                      : p.status === 'running'
+                        ? { background: 'rgba(180,83,9,0.15)', color: '#b45309' }
+                        : { background: 'var(--surface-hover)', color: 'var(--muted)' }
+                  "
+                >
+                  <span>{{ p.icon }}</span>
+                  <span>{{ p.label }}</span>
+                </div>
+                <span v-if="i < pipeline.length - 1" :style="{ color: 'var(--muted)' }">→</span>
+              </template>
             </div>
           </div>
-        </div>
+
+          <!-- Parsed request: what the LLM understood -->
+          <div v-if="parsedRequest && parsedRequest.length > 0" class="mb-3">
+            <div class="mb-1.5 text-[11px] font-semibold uppercase" :style="{ color: 'var(--muted)' }">
+              {{ t("parsed_request") }}
+            </div>
+            <div class="rounded-lg border p-2 text-xs" :style="{ borderColor: 'var(--border)' }">
+              <div v-for="[lbl, val] in parsedRequest" :key="lbl" class="flex gap-1.5 py-0.5">
+                <span :style="{ color: 'var(--muted)' }">{{ lbl }}:</span>
+                <span class="font-medium" :style="{ color: 'var(--text)' }">{{ val }}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Timeline: nodes + nested tools, in execution order -->
+          <div class="mb-1.5 text-[11px] font-semibold uppercase" :style="{ color: 'var(--muted)' }">
+            {{ t("timeline") }}
+          </div>
+          <div class="flex flex-col gap-1.5">
+            <template v-for="tc in toolCalls" :key="tc.id">
+              <!-- Node card -->
+              <div
+                v-if="tc.kind === 'node'"
+                class="rounded-xl border border-l-[3px]"
+                :style="{
+                  borderColor: 'var(--border)',
+                  borderLeftColor: 'var(--primary)',
+                  background: 'var(--surface)',
+                }"
+              >
+                <div class="flex items-center gap-2 px-3 py-2">
+                  <span class="text-base">{{ tc.icon }}</span>
+                  <div class="min-w-0 flex-1">
+                    <div class="text-sm font-medium" :style="{ color: 'var(--text)' }">{{ tc.label }}</div>
+                    <div class="font-mono text-[11px]" :style="{ color: 'var(--muted)' }">
+                      {{ tc.name }}<span v-if="elapsed(tc)"> · {{ elapsed(tc) }}</span>
+                      <span v-if="tc.llmCalls"> · {{ tc.llmCalls }} LLM</span>
+                    </div>
+                  </div>
+                  <StatusBadge :status="tc.status" />
+                </div>
+
+                <!-- Live thinking indicator: an LLM call is running in this node -->
+                <div
+                  v-if="tc.thinking"
+                  class="flex items-center gap-1.5 border-t px-3 py-1.5 text-[11px] font-medium"
+                  :style="{ borderColor: 'var(--border)', color: '#b45309', background: 'rgba(180,83,9,0.06)' }"
+                >
+                  <span class="inline-block h-1.5 w-1.5 animate-pulse rounded-full" :style="{ background: '#b45309' }"></span>
+                  {{ t("thinking_indicator") }}
+                </div>
+
+                <!-- Raw reasoning preview: live LLM tokens (plan/JSON).
+                     Auto-expanded while the node is thinking, auto-collapsed when done. -->
+                <div
+                  v-if="tc.reasoning && (tc.thinking || reasonExpanded.has(tc.id))"
+                  class="border-t px-3 py-2"
+                  :style="{ borderColor: 'var(--border)' }"
+                >
+                  <button
+                    class="mb-1 text-[11px] font-medium transition hover:opacity-70"
+                    :style="{ color: 'var(--muted)' }"
+                    @click="toggleReason(tc.id)"
+                  >
+                    🤖 {{ t("reasoning") }}
+                  </button>
+                  <pre
+                    data-reasoning-pre
+                    class="max-h-40 overflow-y-auto rounded-lg p-2 font-mono text-[10px] leading-relaxed"
+                    :style="{ background: 'var(--surface-hover)', color: 'var(--muted)' }"
+                  >{{ tc.reasoning }}</pre>
+                </div>
+
+                <div v-if="tc.output !== undefined" class="px-3 pb-2">
+                  <button
+                    class="text-[11px] font-medium transition hover:opacity-70"
+                    :style="{ color: 'var(--primary)' }"
+                    @click="toggle(tc.id)"
+                  >
+                    {{ expanded.has(tc.id) ? `▾ ${t("hide_output")}` : `▸ ${t("show_output")}` }}
+                  </button>
+                  <pre
+                    v-if="expanded.has(tc.id)"
+                    class="mt-1 max-h-64 overflow-auto rounded-lg p-2 text-[11px]"
+                    :style="{ background: 'var(--surface-hover)', color: 'var(--text)' }"
+                  >{{ formatJson(tc.output) }}</pre>
+                </div>
+              </div>
+
+              <!-- Tool card (indented under its node) -->
+              <div
+                v-else
+                class="ml-5 rounded-lg border border-dashed"
+                :style="{ borderColor: 'var(--border)', background: 'var(--surface-hover)' }"
+              >
+                <button
+                  class="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left"
+                  @click="toggle(tc.id)"
+                >
+                  <span class="text-xs">🔧</span>
+                  <span class="flex-1 truncate font-mono text-[11px] font-medium" :style="{ color: 'var(--text)' }">
+                    {{ tc.name }}<span v-if="formatToolArgs(tc.input)">({{ formatToolArgs(tc.input) }})</span>
+                  </span>
+                  <StatusBadge :status="tc.status" />
+                </button>
+                <div v-if="tc.output !== undefined && expanded.has(tc.id)" class="px-2.5 pb-2">
+                  <pre
+                    class="max-h-48 overflow-auto rounded-lg p-2 text-[10px]"
+                    :style="{ background: 'var(--surface)', color: 'var(--text)' }"
+                  >{{ formatJson(tc.output) }}</pre>
+                </div>
+              </div>
+            </template>
+          </div>
+        </template>
       </div>
     </div>
   </aside>
