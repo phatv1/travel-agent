@@ -118,3 +118,26 @@ def test_errors_do_not_leak_across_turns(monkeypatch) -> None:
 
     graph.invoke({"messages": [HumanMessage(content="turn 2")]}, config=cfg)
     assert graph.get_state(cfg).values.get("errors", []) == []
+
+
+def test_stream_extracts_final_answer_when_synthesize_returns_aimessage() -> None:
+    # Regression: synthesize returns {"final_answer": str, "messages": [AIMessage]}
+    # so the checkpointer persists the assistant reply. The raw AIMessage makes
+    # the dict non-JSON-serializable; _safe_jsonable must recurse (not stringify
+    # the whole dict) or _extract_final_answer returns None and the chat bubble
+    # renders empty.
+    from langchain_core.messages import AIMessage
+
+    from app.graph.stream import _extract_final_answer, _safe_jsonable
+
+    raw = {
+        "final_answer": "Để mình tư vấn chính xác nhất...",
+        "messages": [AIMessage(content="Để mình tư vấn chính xác nhất...")],
+    }
+
+    safe = _safe_jsonable(raw)
+    # The dict structure must survive (not collapse to a repr string).
+    assert isinstance(safe, dict)
+    assert safe["final_answer"] == "Để mình tư vấn chính xác nhất..."
+    # And the answer must extract from the raw output.
+    assert _extract_final_answer(raw) == "Để mình tư vấn chính xác nhất..."

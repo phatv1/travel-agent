@@ -53,9 +53,20 @@ _FRAMEWORK_WRAPPERS = {"LangGraph", "RunnableSequence", "RunnableParallel"}
 
 
 def _safe_jsonable(value: Any) -> Any:
-    """Return a JSON-serializable copy, falling back to str() for exotic types."""
+    """Return a JSON-serializable copy, recursing into containers.
+
+    Exotic leaves (LangChain messages, custom objects) fall back to str(). The
+    recursion matters: a node output like synthesize's carries a raw AIMessage
+    in its ``messages`` key, and the top-level dict itself is not serializable —
+    a non-recursive ``json.dumps()`` fallback would stringify the WHOLE dict,
+    collapsing the structure and breaking ``_extract_final_answer``.
+    """
     if value is None:
         return None
+    if isinstance(value, dict):
+        return {str(k): _safe_jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_safe_jsonable(v) for v in value]
     try:
         json.dumps(value)
         return value
@@ -140,14 +151,24 @@ async def stream_travel(
                 and name not in _FRAMEWORK_WRAPPERS
             ):
                 ended_nodes.add(name)
-                output = _safe_jsonable(data.get("output"))
+                raw_output = data.get("output")
+                # The synthesize node's state delta carries a raw AIMessage in
+                # `messages` (so the checkpointer persists the assistant reply).
+                # That message body duplicates final_answer and is not
+                # JSON-serializable, so drop it from the trace and extract the
+                # answer from the raw dict (before serialization) for safety.
+                if name == "synthesize" and isinstance(raw_output, dict):
+                    raw_output = {
+                        k: v for k, v in raw_output.items() if k != "messages"
+                    }
+                output = _safe_jsonable(raw_output)
                 yield "node_end", {"name": name, "output": output}
 
                 if name == "supervisor":
                     yield "plan", {"route": _build_route(_extract_plan(output))}
 
                 if name == "synthesize":
-                    final_answer = _extract_final_answer(output)
+                    final_answer = _extract_final_answer(raw_output)
 
             # --- Tool lifecycle (tools invoked via .invoke() inside agent nodes) ---
             elif kind == "on_tool_start":
