@@ -154,37 +154,42 @@ watch(
       {{ t(statusKey) }}
     </div>
 
-    <form class="flex items-end gap-2 border-t px-6 py-3" :style="{ borderColor: 'var(--border)', background: 'var(--surface)' }" @submit.prevent="submit">
-      <div class="relative flex-1">
-        <button
-          type="button"
-          :title="t('expand')"
-          class="absolute bottom-3 left-3 text-base leading-none transition hover:opacity-70"
-          :style="{ color: 'var(--muted)' }"
-          @click="expandOpen = true"
-        >
-          ⤢
-        </button>
+    <form class="border-t px-6 py-3" :style="{ borderColor: 'var(--border)', background: 'var(--surface)' }" @submit.prevent="submit">
+      <div
+        class="flex flex-col rounded-xl border transition focus-within:border-[var(--primary)]"
+        :style="{ background: 'var(--bg)', borderColor: 'var(--border)' }"
+      >
         <textarea
           ref="textareaEl"
           v-model="draft"
           :disabled="loading"
           rows="1"
           :placeholder="t('input_placeholder')"
-          class="block max-h-[200px] w-full resize-none rounded-xl border px-11 py-3 text-sm leading-5 outline-none transition focus:border-[var(--primary)] disabled:opacity-60"
-          :style="{ background: 'var(--surface)', borderColor: 'var(--border)', color: 'var(--text)' }"
+          class="block max-h-[200px] w-full resize-none bg-transparent px-4 pt-3 pb-1 text-sm leading-5 outline-none disabled:opacity-60"
+          :style="{ color: 'var(--text)' }"
           @keydown="onKeydown"
           @input="autoGrow"
         ></textarea>
+        <div class="flex items-center justify-between px-2 pb-2">
+          <button
+            type="button"
+            :title="t('expand')"
+            class="flex h-7 w-7 items-center justify-center rounded-lg text-sm transition hover:bg-[var(--surface-hover)]"
+            :style="{ color: 'var(--muted)' }"
+            @click="expandOpen = true"
+          >
+            ⤢
+          </button>
+          <button
+            type="submit"
+            :disabled="loading || !draft.trim()"
+            class="rounded-lg px-4 py-1.5 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            :style="{ background: 'var(--primary)' }"
+          >
+            {{ t("send") }}
+          </button>
+        </div>
       </div>
-      <button
-        type="submit"
-        :disabled="loading || !draft.trim()"
-        class="h-[44px] shrink-0 rounded-xl px-5 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-        :style="{ background: 'var(--primary)' }"
-      >
-        {{ t("send") }}
-      </button>
     </form>
 
     <InputExpandModal

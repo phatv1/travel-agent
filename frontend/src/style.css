@@ -39,6 +39,12 @@ body.is-resizing * {
   transition: none !important;
 }
 
+/* Keep the input hint on one line — textarea defaults to pre-wrap, which
+   wraps the placeholder to a 2nd line on narrow widths. */
+textarea::placeholder {
+  white-space: nowrap;
+}
+
 body {
   background: var(--bg);
   color: var(--text);

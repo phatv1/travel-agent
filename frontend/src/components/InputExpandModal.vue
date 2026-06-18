@@ -33,8 +33,8 @@ onUnmounted(() => {
         <button
           type="button"
           :title="t('minimize')"
-          class="absolute right-2 top-2 z-10 flex h-8 w-8 items-center justify-center rounded-lg text-base leading-none transition hover:opacity-70"
-          :style="{ background: 'var(--surface-hover)', color: 'var(--muted)' }"
+          class="absolute right-2 top-2 z-10 flex h-7 w-7 items-center justify-center rounded-lg text-sm transition hover:bg-[var(--surface-hover)]"
+          :style="{ color: 'var(--muted)' }"
           @click="emit('close')"
         >
           ⤡
