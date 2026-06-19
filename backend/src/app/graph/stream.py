@@ -28,6 +28,7 @@ Design notes:
 """
 
 import json
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -72,6 +73,33 @@ def _safe_jsonable(value: Any) -> Any:
         return value
     except (TypeError, ValueError, OverflowError):
         return str(value)
+
+
+def _now_ms() -> int:
+    """Epoch milliseconds for trace timing (sent to the client and persisted
+    so the sidebar shows real durations on reload, not synthetic ones)."""
+    return int(time.time() * 1000)
+
+
+def _decode_tool_output(value: Any) -> Any:
+    """Normalize a tool result for the client.
+
+    Tools return Python objects, but ``gather_via_tools`` stringifies them into
+    ``ToolMessage.content`` as JSON text. If we forward that string unchanged,
+    the client's ``JSON.stringify`` double-encodes it
+    (``\"{\\\"price_vnd\\\": null}\"") and the user sees an escaped blob
+    instead of a structured value. Decode JSON-looking strings back to objects
+    here; anything else (plain strings, already-parsed objects) flows through
+    ``_safe_jsonable`` as before.
+    """
+    if isinstance(value, str):
+        stripped = value.lstrip()
+        if stripped[:1] in "{[":
+            try:
+                return _safe_jsonable(json.loads(value))
+            except (ValueError, TypeError):
+                pass
+    return _safe_jsonable(value)
 
 
 def _build_route(plan: list[str] | None) -> list[dict[str, str]]:
@@ -142,7 +170,11 @@ async def stream_travel(
                 and name not in started_nodes
             ):
                 started_nodes.add(name)
-                yield "node_start", {"name": name, **NODE_META[name]}
+                yield "node_start", {
+                    "name": name,
+                    **NODE_META[name],
+                    "started_at": _now_ms(),
+                }
 
             elif (
                 kind == "on_chain_end"
@@ -162,7 +194,11 @@ async def stream_travel(
                         k: v for k, v in raw_output.items() if k != "messages"
                     }
                 output = _safe_jsonable(raw_output)
-                yield "node_end", {"name": name, "output": output}
+                yield "node_end", {
+                    "name": name,
+                    "output": output,
+                    "finished_at": _now_ms(),
+                }
 
                 if name == "supervisor":
                     yield "plan", {"route": _build_route(_extract_plan(output))}
@@ -177,13 +213,15 @@ async def stream_travel(
                     "node": node,
                     "name": name,
                     "input": _safe_jsonable(data.get("input")),
+                    "started_at": _now_ms(),
                 }
             elif kind == "on_tool_end":
                 ctx = tool_context.pop(ev["run_id"], {"node": node, "name": name})
                 yield "tool_end", {
                     "node": ctx.get("node") or node,
                     "name": ctx.get("name") or name,
-                    "output": _safe_jsonable(data.get("output")),
+                    "output": _decode_tool_output(data.get("output")),
+                    "finished_at": _now_ms(),
                 }
 
             # --- Chat-model activity: thinking indicator + token streaming ---

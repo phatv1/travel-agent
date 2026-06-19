@@ -143,6 +143,7 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                         "status": "running",
                         "input": {},
                         "kind": "node",
+                        "started_at": payload.get("started_at"),
                     }
                 )
             elif etype == "node_end":
@@ -150,6 +151,7 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                     if step["name"] == payload["name"] and step.get("status") == "running":
                         step["status"] = "done"
                         step["output"] = payload.get("output")
+                        step["finished_at"] = payload.get("finished_at")
                         break
             elif etype == "tool_start":
                 trace.append(
@@ -161,6 +163,7 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                         "input": payload.get("input"),
                         "kind": "tool",
                         "node": payload.get("node"),
+                        "started_at": payload.get("started_at"),
                     }
                 )
             elif etype == "tool_end":
@@ -173,6 +176,7 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                     ):
                         step["status"] = "done"
                         step["output"] = payload.get("output")
+                        step["finished_at"] = payload.get("finished_at")
                         break
             elif etype == "final":
                 final_answer = payload.get("final_answer", "")

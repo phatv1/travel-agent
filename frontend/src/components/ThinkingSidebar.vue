@@ -130,6 +130,39 @@ const parsedRequest = computed<[string, unknown][] | null>(() => {
     .filter(([, v]) => v !== null && v !== "" && v !== undefined)
 })
 
+// Timeline grouping: nest a node's tool calls inside its card so the reading
+// order matches execution order (tools first, then the node's synthesized
+// output) instead of the tools dangling below the output they produced.
+interface NodeGroup {
+  type: "node"
+  node: ToolCall
+  tools: ToolCall[]
+}
+interface OrphanTool {
+  type: "tool"
+  tool: ToolCall
+}
+type TimelineItem = NodeGroup | OrphanTool
+
+const grouped = computed<TimelineItem[]>(() => {
+  const items: TimelineItem[] = []
+  for (const tc of props.toolCalls ?? []) {
+    if (tc.kind === "node") {
+      items.push({ type: "node", node: tc, tools: [] })
+      continue
+    }
+    // Attach to the most recent node matching this tool's parent name; tools
+    // fire during a node's run so the match is always the latest of that name.
+    const parentName = tc.node
+    const parent = [...items]
+      .reverse()
+      .find((it): it is NodeGroup => it.type === "node" && it.node.name === parentName)
+    if (parent) parent.tools.push(tc)
+    else items.push({ type: "tool", tool: tc })
+  }
+  return items
+})
+
 const anyRunning = computed(
   () => (props.toolCalls ?? []).some((s) => s.status === "running"),
 )
@@ -239,10 +272,10 @@ watch(
             {{ t("timeline") }}
           </div>
           <div class="flex flex-col gap-1.5">
-            <template v-for="tc in toolCalls" :key="tc.id">
-              <!-- Node card -->
+            <template v-for="item in grouped" :key="item.type === 'node' ? item.node.id : item.tool.id">
+              <!-- Node card with its tool calls nested inside -->
               <div
-                v-if="tc.kind === 'node'"
+                v-if="item.type === 'node'"
                 class="rounded-xl border border-l-[3px]"
                 :style="{
                   borderColor: 'var(--border)',
@@ -251,20 +284,20 @@ watch(
                 }"
               >
                 <div class="flex items-center gap-2 px-3 py-2">
-                  <span class="text-base">{{ tc.icon }}</span>
+                  <span class="text-base">{{ item.node.icon }}</span>
                   <div class="min-w-0 flex-1">
-                    <div class="text-sm font-medium" :style="{ color: 'var(--text)' }">{{ tc.label }}</div>
+                    <div class="text-sm font-medium" :style="{ color: 'var(--text)' }">{{ item.node.label }}</div>
                     <div class="font-mono text-[11px]" :style="{ color: 'var(--muted)' }">
-                      {{ tc.name }}<span v-if="elapsed(tc)"> · {{ elapsed(tc) }}</span>
-                      <span v-if="tc.llmCalls"> · {{ tc.llmCalls }} LLM</span>
+                      {{ item.node.name }}<span v-if="elapsed(item.node)"> · {{ elapsed(item.node) }}</span>
+                      <span v-if="item.node.llmCalls"> · {{ item.node.llmCalls }} LLM</span>
                     </div>
                   </div>
-                  <StatusBadge :status="tc.status" />
+                  <StatusBadge :status="item.node.status" />
                 </div>
 
                 <!-- Live thinking indicator: an LLM call is running in this node -->
                 <div
-                  v-if="tc.thinking"
+                  v-if="item.node.thinking"
                   class="flex items-center gap-1.5 border-t px-3 py-1.5 text-[11px] font-medium"
                   :style="{ borderColor: 'var(--border)', color: '#b45309', background: 'rgba(180,83,9,0.06)' }"
                 >
@@ -275,14 +308,14 @@ watch(
                 <!-- Raw reasoning preview: live LLM tokens (plan/JSON).
                      Auto-expanded while the node is thinking, auto-collapsed when done. -->
                 <div
-                  v-if="tc.reasoning && (tc.thinking || reasonExpanded.has(tc.id))"
+                  v-if="item.node.reasoning && (item.node.thinking || reasonExpanded.has(item.node.id))"
                   class="border-t px-3 py-2"
                   :style="{ borderColor: 'var(--border)' }"
                 >
                   <button
                     class="mb-1 text-[11px] font-medium transition hover:opacity-70"
                     :style="{ color: 'var(--muted)' }"
-                    @click="toggleReason(tc.id)"
+                    @click="toggleReason(item.node.id)"
                   >
                     🤖 {{ t("reasoning") }}
                   </button>
@@ -290,46 +323,74 @@ watch(
                     data-reasoning-pre
                     class="max-h-40 overflow-y-auto rounded-lg p-2 font-mono text-[10px] leading-relaxed"
                     :style="{ background: 'var(--surface-hover)', color: 'var(--muted)' }"
-                  >{{ tc.reasoning }}</pre>
+                  >{{ item.node.reasoning }}</pre>
                 </div>
 
-                <div v-if="tc.output !== undefined" class="px-3 pb-2">
+                <!-- Nested tool calls: the steps that produced this node's output -->
+                <div v-if="item.tools.length" class="flex flex-col gap-1 border-t px-3 py-2" :style="{ borderColor: 'var(--border)' }">
+                  <div
+                    v-for="tool in item.tools"
+                    :key="tool.id"
+                    class="rounded-lg border border-dashed"
+                    :style="{ borderColor: 'var(--border)', background: 'var(--surface-hover)' }"
+                  >
+                    <button
+                      class="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left"
+                      @click="toggle(tool.id)"
+                    >
+                      <span class="text-xs">🔧</span>
+                      <span class="flex-1 truncate font-mono text-[11px] font-medium" :style="{ color: 'var(--text)' }">
+                        {{ tool.name }}<span v-if="formatToolArgs(tool.input)">({{ formatToolArgs(tool.input) }})</span>
+                      </span>
+                      <StatusBadge :status="tool.status" />
+                    </button>
+                    <div v-if="tool.output !== undefined && expanded.has(tool.id)" class="px-2.5 pb-2">
+                      <pre
+                        class="max-h-48 overflow-auto rounded-lg p-2 text-[10px]"
+                        :style="{ background: 'var(--surface)', color: 'var(--text)' }"
+                      >{{ formatJson(tool.output) }}</pre>
+                    </div>
+                  </div>
+                </div>
+
+                <div v-if="item.node.output !== undefined" class="px-3 pb-2">
                   <button
                     class="text-[11px] font-medium transition hover:opacity-70"
                     :style="{ color: 'var(--primary)' }"
-                    @click="toggle(tc.id)"
+                    @click="toggle(item.node.id)"
                   >
-                    {{ expanded.has(tc.id) ? `▾ ${t("hide_output")}` : `▸ ${t("show_output")}` }}
+                    {{ expanded.has(item.node.id) ? `▾ ${t("hide_output")}` : `▸ ${t("show_output")}` }}
                   </button>
                   <pre
-                    v-if="expanded.has(tc.id)"
+                    v-if="expanded.has(item.node.id)"
                     class="mt-1 max-h-64 overflow-auto rounded-lg p-2 text-[11px]"
                     :style="{ background: 'var(--surface-hover)', color: 'var(--text)' }"
-                  >{{ formatJson(tc.output) }}</pre>
+                  >{{ formatJson(item.node.output) }}</pre>
                 </div>
               </div>
 
-              <!-- Tool card (indented under its node) -->
+              <!-- Orphan tool: a tool whose parent node never appeared in the
+                   trace (edge case); render flat so it is still visible. -->
               <div
                 v-else
-                class="ml-5 rounded-lg border border-dashed"
+                class="rounded-lg border border-dashed"
                 :style="{ borderColor: 'var(--border)', background: 'var(--surface-hover)' }"
               >
                 <button
                   class="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left"
-                  @click="toggle(tc.id)"
+                  @click="toggle(item.tool.id)"
                 >
                   <span class="text-xs">🔧</span>
                   <span class="flex-1 truncate font-mono text-[11px] font-medium" :style="{ color: 'var(--text)' }">
-                    {{ tc.name }}<span v-if="formatToolArgs(tc.input)">({{ formatToolArgs(tc.input) }})</span>
+                    {{ item.tool.name }}<span v-if="formatToolArgs(item.tool.input)">({{ formatToolArgs(item.tool.input) }})</span>
                   </span>
-                  <StatusBadge :status="tc.status" />
+                  <StatusBadge :status="item.tool.status" />
                 </button>
-                <div v-if="tc.output !== undefined && expanded.has(tc.id)" class="px-2.5 pb-2">
+                <div v-if="item.tool.output !== undefined && expanded.has(item.tool.id)" class="px-2.5 pb-2">
                   <pre
                     class="max-h-48 overflow-auto rounded-lg p-2 text-[10px]"
                     :style="{ background: 'var(--surface)', color: 'var(--text)' }"
-                  >{{ formatJson(tc.output) }}</pre>
+                  >{{ formatJson(item.tool.output) }}</pre>
                 </div>
               </div>
             </template>

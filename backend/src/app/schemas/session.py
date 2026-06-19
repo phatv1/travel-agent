@@ -14,6 +14,11 @@ class ToolCallData(BaseModel):
     kind: str = "node"
     # Parent node name for tools (e.g. "itinerary"); None for nodes.
     node: str | None = None
+    # Epoch milliseconds so the sidebar shows real durations on reload.
+    # None for traces rebuilt from the final result (non-streaming path),
+    # which has no timing information.
+    started_at: int | None = None
+    finished_at: int | None = None
 
 
 class MessageOut(BaseModel):

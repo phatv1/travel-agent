@@ -16,6 +16,8 @@ interface ToolCallDTO {
   output?: unknown
   kind?: string
   node?: string | null
+  started_at?: number | null
+  finished_at?: number | null
 }
 
 interface MessageDTO {
@@ -52,7 +54,7 @@ function mapStatus(s: string): ToolCallStatus {
 function toToolCalls(items?: ToolCallDTO[] | null): ToolCall[] | undefined {
   if (!items) return undefined
   const base = Date.now()
-  return items.map((it, i) => ({
+  return items.map((it) => ({
     id: `srv-${base}-${toolCounter++}`,
     kind: (it.kind === "tool" ? "tool" : "node") as ToolCall["kind"],
     name: it.name,
@@ -62,8 +64,10 @@ function toToolCalls(items?: ToolCallDTO[] | null): ToolCall[] | undefined {
     input: it.input,
     output: it.output,
     status: mapStatus(it.status),
-    startedAt: base - (items.length - i),
-    finishedAt: mapStatus(it.status) === "done" ? base : undefined,
+    // Use the server-measured epoch ms; fall back to now for rows persisted
+    // before started_at/finished_at were stored (legacy sessions).
+    startedAt: it.started_at ?? base,
+    finishedAt: it.finished_at ?? undefined,
   }))
 }
 
