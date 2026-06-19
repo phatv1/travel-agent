@@ -29,7 +29,9 @@ def test_repo_add_message_autotitle_cascade() -> None:
 
     changed = repo.autotitle_if_default(s["id"], "Đi Đà Nẵng 3 ngày\nngười")
     assert changed is True
-    assert repo.get_session(s["id"])["title"] == "Đi Đà Nẵng 3 ngày người"
+    retitled = repo.get_session(s["id"])
+    assert retitled is not None
+    assert retitled["title"] == "Đi Đà Nẵng 3 ngày người"
 
     repo.add_message(s["id"], role="user", content="hi")
     msg = repo.add_message(
@@ -38,6 +40,7 @@ def test_repo_add_message_autotitle_cascade() -> None:
     assert msg["tool_calls"] == [{"name": "x"}]
 
     full = repo.get_session(s["id"])
+    assert full is not None
     assert len(full["messages"]) == 2
     assert full["messages"][1]["tool_calls"] == [{"name": "x"}]
 

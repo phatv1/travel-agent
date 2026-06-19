@@ -1,6 +1,6 @@
 """Build and compile the travel agent graph (supervisor plan-then-execute)."""
 
-from typing import Any, Literal
+from typing import Literal
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
@@ -14,7 +14,7 @@ from app.schemas.state import InputState, OutputState, TravelState
 
 
 def _next_step(
-    state: dict[str, Any],
+    state: TravelState,
 ) -> Command[Literal["itinerary", "recommendation", "cost", "synthesize"]]:
     # Single shared router node. Reads the supervisor's plan and a cursor, then
     # dispatches to the next planned agent (advancing the cursor atomically), or

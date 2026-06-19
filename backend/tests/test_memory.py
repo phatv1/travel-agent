@@ -10,15 +10,23 @@ backend — this isolates the multi-turn LOGIC from storage I/O.
 """
 
 from types import SimpleNamespace
+from typing import cast
 
 from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import MemorySaver
 
 from app.agents import supervisor as supervisor_module
 from app.agents.supervisor import SupervisorDecision
 from app.graph import synthesis as synthesis_module
 from app.graph.builder import build_travel_graph
+from app.schemas.state import InputState
 from app.schemas.trip import TripRequest
+
+
+def _cfg(thread_id: str) -> RunnableConfig:
+    """Typed RunnableConfig for a checkpointed thread (avoids inline dict typing)."""
+    return {"configurable": {"thread_id": thread_id}}
 
 
 def _wire_direct_reply(monkeypatch) -> None:
@@ -59,7 +67,7 @@ def test_history_accumulates_across_turns_under_same_thread(monkeypatch) -> None
     )
 
     graph = build_travel_graph(checkpointer=MemorySaver())
-    cfg = {"configurable": {"thread_id": "trip-1"}}
+    cfg = _cfg("trip-1")
 
     graph.invoke({"messages": [HumanMessage(content="Đà Nẵng 3 ngày")]}, config=cfg)
     graph.invoke({"messages": [HumanMessage(content="thêm 1 ngày")]}, config=cfg)
@@ -89,16 +97,14 @@ def test_threads_are_isolated(monkeypatch) -> None:
     graph = build_travel_graph(checkpointer=MemorySaver())
 
     graph.invoke(
-        {"messages": [HumanMessage(content="Đà Nẵng 3 ngày")]},
-        config={"configurable": {"thread_id": "A"}},
+        {"messages": [HumanMessage(content="Đà Nẵng 3 ngày")]}, config=_cfg("A")
     )
     graph.invoke(
-        {"messages": [HumanMessage(content="Hà Nội 2 ngày")]},
-        config={"configurable": {"thread_id": "B"}},
+        {"messages": [HumanMessage(content="Hà Nội 2 ngày")]}, config=_cfg("B")
     )
 
     # Thread B's checkpoint has only its own 2 messages — none from A.
-    msgs = graph.get_state({"configurable": {"thread_id": "B"}}).values["messages"]
+    msgs = graph.get_state(_cfg("B")).values["messages"]
     assert len(msgs) == 2
     assert "Hà Nội 2 ngày" in msgs[0].content
     assert all("Đà Nẵng" not in getattr(m, "content", "") for m in msgs)
@@ -110,15 +116,21 @@ def test_errors_do_not_leak_across_turns(monkeypatch) -> None:
     # is what makes this safe with a checkpointer attached.
     _wire_direct_reply(monkeypatch)
     graph = build_travel_graph(checkpointer=MemorySaver())
-    cfg = {"configurable": {"thread_id": "err-1"}}
+    cfg = _cfg("err-1")
+
+    # Seed an errors entry directly into the checkpointed state. input_schema
+    # filters extra keys, so use update_state (with as_node so it persists).
+    graph.update_state(cfg, {"errors": ["stale failure"]}, as_node="supervisor")
+    assert graph.get_state(cfg).values.get("errors", []) == ["stale failure"]
 
     graph.invoke(
-        {"messages": [HumanMessage(content="turn 1")], "errors": ["stale failure"]},
-        config=cfg,
+        cast(InputState, {"messages": [HumanMessage(content="turn 1")]}), config=cfg
     )
     assert graph.get_state(cfg).values.get("errors", []) == []
 
-    graph.invoke({"messages": [HumanMessage(content="turn 2")]}, config=cfg)
+    graph.invoke(
+        cast(InputState, {"messages": [HumanMessage(content="turn 2")]}), config=cfg
+    )
     assert graph.get_state(cfg).values.get("errors", []) == []
 
 

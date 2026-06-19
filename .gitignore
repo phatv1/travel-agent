@@ -216,3 +216,7 @@ __marimo__/
 .streamlit/secrets.toml
 
 **local**
+# LangGraph checkpointer runtime DB (multi-turn memory)
+checkpoint.sqlite3
+checkpoint.sqlite3-shm
+checkpoint.sqlite3-wal

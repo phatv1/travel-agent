@@ -7,7 +7,7 @@ straight to a graceful synthesis message.
 
 from collections.abc import Sequence
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from langchain_core.messages import BaseMessage, HumanMessage
@@ -115,18 +115,22 @@ def test_supervisor_node_emits_plan(monkeypatch) -> None:
 
 
 def test_next_step_empty_plan_goes_to_synthesize() -> None:
-    assert _next_step({}).goto == "synthesize"
-    assert _next_step({"plan": [], "step_index": 0}).goto == "synthesize"
+    assert _next_step(cast(TravelState, {})).goto == "synthesize"
+    assert _next_step(
+        cast(TravelState, {"plan": [], "step_index": 0})
+    ).goto == "synthesize"
 
 
 def test_next_step_dispatches_and_advances_cursor() -> None:
-    cmd = _next_step({"plan": ["itinerary", "cost"], "step_index": 0})
+    cmd = _next_step(cast(TravelState, {"plan": ["itinerary", "cost"], "step_index": 0}))
     assert cmd.goto == "itinerary"
     assert cmd.update == {"step_index": 1}
 
 
 def test_next_step_at_end_goes_to_synthesize() -> None:
-    assert _next_step({"plan": ["recommendation"], "step_index": 1}).goto == "synthesize"
+    assert _next_step(
+        cast(TravelState, {"plan": ["recommendation"], "step_index": 1})
+    ).goto == "synthesize"
 
 
 def test_graph_supervisor_failure_short_circuits(monkeypatch) -> None:
