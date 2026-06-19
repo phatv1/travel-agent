@@ -305,27 +305,6 @@ watch(
                   {{ t("thinking_indicator") }}
                 </div>
 
-                <!-- Raw reasoning preview: live LLM tokens (plan/JSON).
-                     Auto-expanded while the node is thinking, auto-collapsed when done. -->
-                <div
-                  v-if="item.node.reasoning && (item.node.thinking || reasonExpanded.has(item.node.id))"
-                  class="border-t px-3 py-2"
-                  :style="{ borderColor: 'var(--border)' }"
-                >
-                  <button
-                    class="mb-1 text-[11px] font-medium transition hover:opacity-70"
-                    :style="{ color: 'var(--muted)' }"
-                    @click="toggleReason(item.node.id)"
-                  >
-                    🤖 {{ t("reasoning") }}
-                  </button>
-                  <pre
-                    data-reasoning-pre
-                    class="max-h-40 overflow-y-auto rounded-lg p-2 font-mono text-[10px] leading-relaxed"
-                    :style="{ background: 'var(--surface-hover)', color: 'var(--muted)' }"
-                  >{{ item.node.reasoning }}</pre>
-                </div>
-
                 <!-- Nested tool calls: the steps that produced this node's output -->
                 <div v-if="item.tools.length" class="flex flex-col gap-1 border-t px-3 py-2" :style="{ borderColor: 'var(--border)' }">
                   <div
@@ -351,6 +330,32 @@ watch(
                       >{{ formatJson(tool.output) }}</pre>
                     </div>
                   </div>
+                </div>
+
+                <!-- Raw reasoning preview: live LLM tokens (plan/JSON).
+                     Positioned AFTER the tools because the visible reasoning is
+                     the phase-2 structured output being generated, which runs
+                     after the tools gathered their data — so the live text
+                     reads top-down as tools → output, matching execution.
+                     Auto-expanded while the node is thinking, auto-collapsed
+                     when done. -->
+                <div
+                  v-if="item.node.reasoning && (item.node.thinking || reasonExpanded.has(item.node.id))"
+                  class="border-t px-3 py-2"
+                  :style="{ borderColor: 'var(--border)' }"
+                >
+                  <button
+                    class="mb-1 text-[11px] font-medium transition hover:opacity-70"
+                    :style="{ color: 'var(--muted)' }"
+                    @click="toggleReason(item.node.id)"
+                  >
+                    🤖 {{ t("reasoning") }}
+                  </button>
+                  <pre
+                    data-reasoning-pre
+                    class="max-h-40 overflow-y-auto rounded-lg p-2 font-mono text-[10px] leading-relaxed"
+                    :style="{ background: 'var(--surface-hover)', color: 'var(--muted)' }"
+                  >{{ item.node.reasoning }}</pre>
                 </div>
 
                 <div v-if="item.node.output !== undefined" class="px-3 pb-2">
