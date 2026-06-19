@@ -62,6 +62,15 @@ const dict: Record<Locale, Record<string, string>> = {
     thinking_display: "Hiển thị suy nghĩ",
     mode_auto: "Tự động",
     mode_manual: "Thủ công",
+    // Slash command templates
+    slash_hint: "Gõ / để chọn mẫu nhanh",
+    tpl_fast: "Nhanh",
+    tpl_fast_desc: "Điểm đến + thời gian",
+    tpl_advanced: "Chi tiết",
+    tpl_advanced_desc: "Form đầy đủ cho chuyến đi",
+    tpl_required: "bắt buộc",
+    tpl_optional: "tuỳ chọn",
+    tpl_clear: "Thoát mẫu",
   },
   en: {
     sessions: "Sessions",
@@ -119,6 +128,15 @@ const dict: Record<Locale, Record<string, string>> = {
     thinking_display: "Thinking display",
     mode_auto: "Automatic",
     mode_manual: "Manual",
+    // Slash command templates
+    slash_hint: "Type / to pick a template",
+    tpl_fast: "Fast",
+    tpl_fast_desc: "Destination + time",
+    tpl_advanced: "Advanced",
+    tpl_advanced_desc: "Full trip form",
+    tpl_required: "required",
+    tpl_optional: "optional",
+    tpl_clear: "Exit template",
   },
 }
 

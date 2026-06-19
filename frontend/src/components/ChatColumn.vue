@@ -1,10 +1,19 @@
 <script setup lang="ts">
-import { ref, watch, nextTick } from "vue"
+import { computed, nextTick, ref, watch } from "vue"
 import { marked } from "marked"
 import DOMPurify from "dompurify"
 import type { ChatSession } from "../types"
 import { t } from "../lib/i18n"
+import {
+  composePrompt,
+  initialValues,
+  isComplete,
+  type TemplateKind,
+  type TemplateValues,
+} from "../lib/templates"
 import InputExpandModal from "./InputExpandModal.vue"
+import SlashMenu from "./SlashMenu.vue"
+import TemplateFields from "./TemplateFields.vue"
 
 const props = defineProps<{
   session: ChatSession | null
@@ -24,19 +33,90 @@ const messagesEl = ref<HTMLDivElement | null>(null)
 const textareaEl = ref<HTMLTextAreaElement | null>(null)
 const expandOpen = ref(false)
 
+// Slash-command templates. "free" = plain textarea; "fast"/"advanced" =
+// inline form whose submit composes a natural-language prompt the supervisor
+// parses as if the user typed it. UI-only — no backend contract.
+type ComposeMode = "free" | TemplateKind
+const mode = ref<ComposeMode>("free")
+const tplValues = ref<TemplateValues>({})
+const slashMenuOpen = ref(false)
+
+// Slash menu opens only when the draft is exactly "/" in free mode; any further
+// typing or template entry closes it.
+watch(draft, (v) => {
+  slashMenuOpen.value = mode.value === "free" && v === "/"
+})
+
+const canSend = computed(() => {
+  if (props.loading) return false
+  if (mode.value === "free") return draft.value.trim().length > 0
+  return isComplete(mode.value, tplValues.value)
+})
+
+const templateIcon = computed(() =>
+  mode.value === "fast" ? "⚡" : mode.value === "advanced" ? "🎯" : "",
+)
+const templateTitle = computed(() =>
+  mode.value === "fast" ? t("tpl_fast") : mode.value === "advanced" ? t("tpl_advanced") : "",
+)
+
 function render(md: string): string {
   return DOMPurify.sanitize(marked.parse(md, { async: false }) as string)
 }
 
 function submit() {
-  const text = draft.value.trim()
+  let text: string
+  if (mode.value === "free") {
+    text = draft.value.trim()
+  } else {
+    if (!isComplete(mode.value, tplValues.value)) return
+    text = composePrompt(mode.value, tplValues.value)
+    if (!text) return
+  }
   if (!text || props.loading) return
   emit("send", text)
+  // Reset to free mode so the next turn starts from a plain textarea.
+  mode.value = "free"
+  tplValues.value = {}
   draft.value = ""
   autoGrow()
 }
 
+function onSlashSelect(kind: TemplateKind) {
+  mode.value = kind
+  tplValues.value = initialValues(kind)
+  draft.value = "" // clear the triggering "/"
+  slashMenuOpen.value = false
+}
+
+function onSlashClose() {
+  slashMenuOpen.value = false
+  // Don't leave a lone "/" in the textarea.
+  if (draft.value === "/") draft.value = ""
+}
+
+function triggerSlash() {
+  // Discoverable "/" button: drop a "/" into the empty draft so the watch
+  // opens the menu (same path as typing it).
+  draft.value = "/"
+  nextTick(() => textareaEl.value?.focus())
+}
+
+function exitTemplate() {
+  mode.value = "free"
+  tplValues.value = {}
+  draft.value = ""
+  nextTick(() => textareaEl.value?.focus())
+}
+
 function onKeydown(e: KeyboardEvent) {
+  // While the slash menu is open, SlashMenu owns Enter + Tab (select) — don't
+  // fall through to submit (which would send "/" as a message) and stop the
+  // textarea defaults (Enter newline, Tab focus-move).
+  if (slashMenuOpen.value && (e.key === "Enter" || e.key === "Tab")) {
+    e.preventDefault()
+    return
+  }
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault()
     submit()
@@ -154,12 +234,26 @@ watch(
       {{ t(statusKey) }}
     </div>
 
-    <form class="border-t px-6 py-3" :style="{ borderColor: 'var(--border)', background: 'var(--surface)' }" @submit.prevent="submit">
+    <form class="relative border-t px-6 py-3" :style="{ borderColor: 'var(--border)', background: 'var(--surface)' }" @submit.prevent="submit">
+      <SlashMenu :open="slashMenuOpen" @select="onSlashSelect" @close="onSlashClose" />
       <div
         class="flex flex-col rounded-xl border transition focus-within:border-[var(--primary)]"
         :style="{ background: 'var(--bg)', borderColor: 'var(--border)' }"
       >
+        <!-- TEMPLATE MODE: inline form instead of free-text textarea -->
+        <div v-if="mode !== 'free'" class="flex items-center gap-1.5 px-4 pt-2.5 text-xs font-semibold" :style="{ color: 'var(--muted)' }">
+          <span>{{ templateIcon }}</span>
+          <span>{{ templateTitle }}</span>
+        </div>
+        <TemplateFields
+          v-if="mode !== 'free'"
+          v-model="tplValues"
+          :kind="mode"
+        />
+
+        <!-- FREE MODE: plain textarea -->
         <textarea
+          v-else
           ref="textareaEl"
           v-model="draft"
           :disabled="loading"
@@ -171,18 +265,41 @@ watch(
           @input="autoGrow"
         ></textarea>
         <div class="flex items-center justify-between px-2 pb-2">
-          <button
-            type="button"
-            :title="t('expand')"
-            class="flex h-7 w-7 items-center justify-center rounded-lg text-sm transition hover:bg-[var(--surface-hover)]"
-            :style="{ color: 'var(--muted)' }"
-            @click="expandOpen = true"
-          >
-            ⤢
-          </button>
+          <div class="flex items-center gap-0.5">
+            <button
+              v-if="mode === 'free'"
+              type="button"
+              :title="t('slash_hint')"
+              class="flex h-7 w-7 items-center justify-center rounded-lg text-sm transition hover:bg-[var(--surface-hover)]"
+              :style="{ color: 'var(--muted)' }"
+              @click="triggerSlash"
+            >
+              /
+            </button>
+            <button
+              v-if="mode === 'free'"
+              type="button"
+              :title="t('expand')"
+              class="flex h-7 w-7 items-center justify-center rounded-lg text-sm transition hover:bg-[var(--surface-hover)]"
+              :style="{ color: 'var(--muted)' }"
+              @click="expandOpen = true"
+            >
+              ⤢
+            </button>
+            <button
+              v-else
+              type="button"
+              :title="t('tpl_clear')"
+              class="flex items-center gap-1 rounded-lg px-2 py-1 text-xs transition hover:bg-[var(--surface-hover)]"
+              :style="{ color: 'var(--muted)' }"
+              @click="exitTemplate"
+            >
+              ✕ {{ t('tpl_clear') }}
+            </button>
+          </div>
           <button
             type="submit"
-            :disabled="loading || !draft.trim()"
+            :disabled="!canSend"
             class="rounded-lg px-4 py-1.5 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
             :style="{ background: 'var(--primary)' }"
           >
