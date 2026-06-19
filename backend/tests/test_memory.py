@@ -27,6 +27,7 @@ def _wire_direct_reply(monkeypatch) -> None:
         supervisor_module,
         "invoke_structured",
         lambda *a, **k: SupervisorDecision(
+            action="direct",
             trip_request=TripRequest(destination="Đà Nẵng", time_preference="3 ngày"),
             steps=[],  # direct-reply path -> synthesize without domain agents
         ),
@@ -45,6 +46,7 @@ def test_history_accumulates_across_turns_under_same_thread(monkeypatch) -> None
     def _supervisor(*args, **_kwargs):
         seen.append(list(args[2]))  # [SystemMessage, *conversation]
         return SupervisorDecision(
+            action="direct",
             trip_request=TripRequest(destination="Đà Nẵng", time_preference="3 ngày"),
             steps=[],
         )

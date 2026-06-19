@@ -1,95 +1,92 @@
-"""Supervisor agent: parse the request into a TripRequest and an agent plan."""
+"""Supervisor agent: route the turn from the full conversation context."""
 
 from langchain_core.messages import SystemMessage
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.agents._llm import error_label, invoke_structured
 from app.llms.factory import get_llm
-from app.schemas.state import AgentStep, TravelState
+from app.schemas.state import AgentAction, AgentStep, TravelState
 from app.schemas.trip import TripRequest
 
 _SYSTEM_PROMPT = """\
-Bạn là supervisor của trợ lý tư vấn du lịch.
-Nhiệm vụ: từ CUỘC TRÒ CHUYỆN (có thể nhiều lượt), trích xuất TripRequest VÀ
-quyết định steps (thứ tự agents cần chạy trong lượt này).
+Bạn là supervisor của trợ lý tư vấn du lịch. Bạn thấy TOÀN BỘ lịch sử hội thoại
+(có thể nhiều lượt) và là NGƯỜI QUYẾT ĐỊNH duy nhất cho lượt này làm gì.
 
-Phần 1 - TripRequest: trích xuất
+Phần 1 — TripRequest (gộp intent từ toàn bộ ngữ cảnh):
 - destination, origin, time_preference, budget_preference, companions, preferences.
 - needs_itinerary / needs_recommendations / needs_cost_estimation.
-- Trường không rõ thì để null. KHÔNG được tự bịa/giả định (đặc biệt không mặc định
-  điểm đến hay độ dài chuyến): user không nói thì để null.
+- Đa lượt (FOLLOW-UP): tin nhắn cuối có thể tham chiếu lượt trước ("thêm 1 ngày nữa",
+  "đổi khách sạn rẻ hơn", "đi thêm Phú Quốc", "nhóm thêm 2 người", "vậy còn chi phí?").
+  TripRequest phải phản ánh chuyến đi SAU KHI ÁP DỤNG thay đổi của lượt này lên ngữ cảnh
+  trước — KHÔNG phải chỉ tin nhắn cuối. Vd: trước "Đà Nẵng 3 ngày", nay "thêm 1 ngày"
+  → destination="Đà Nẵng", time_preference="4 ngày".
+- Trường không rõ thì để null. KHÔNG tự bịa/giả định điểm đến hay độ dài chuyến.
 
-Phần 2 - steps (QUYẾT ĐỊNH ROUTING, quan trọng nhất):
-Danh sách agent cần chạy theo THỨ TỰ. Mỗi phần tử là một trong:
-- "itinerary": lập lịch trình theo ngày.
-- "recommendation": gợi ý khách sạn/quán ăn.
-- "cost": ước lượng chi phí.
+Phần 2 — action (QUYẾT ĐỊNH ROUTING, quan trọng nhất). Chọn MỘT:
+- "plan": đủ thông tin để lên kế hoạch hữu ích (được phép giả định hợp lý cho những
+  thứ nhỏ, ví dụ "2 người" nếu không nói). Đặt `steps` là danh sách agent cần chạy.
+- "clarify": user muốn đi du lịch NHƯNG đang thiếu thông tin cốt lõi đến mức không
+  thể tư vấn tử tế (thường là destination HOẶC time_preference). Hệ thống sẽ hỏi lại
+  TỰ NHIÊN + đưa gợi ý. Đặt steps = [].
+- "direct": không phải du lịch (chào hỏi, hỏi chung, cảm ơn, trò chuyện) HOẶC câu
+  hỏi mà agent không cần chạy (vd hỏi thông tin chung). Đặt steps = [].
 
-Quy tắc chọn steps:
-- THÔNG TIN BẮT BUỘC: destination VÀ time_preference. Nếu user muốn đi du lịch nhưng
-  chưa nêu điểm đến hoặc khoảng thời gian → steps = [] và để các trường đó null
-  (hệ thống sẽ yêu cầu user bổ sung, KHÔNG tự giả định để chạy agent).
-- Yêu cầu đầy đủ (đủ thông tin bắt buộc) → ["itinerary", "recommendation", "cost"].
-- Chỉ một việc (ví dụ "chỉ gợi ý khách sạn") → ["recommendation"].
-- cost luôn CUỐI danh sách khi có mặt, vì cần dữ liệu từ itinerary/recommendation.
-- Không lặp lại agent trong steps.
-- Nếu tin nhắn KHÔNG liên quan du lịch (chào hỏi, hỏi chung, cảm ơn...) → steps = []
-  để trả lời trực tiếp.
+Quy tắc chọn action (theo thứ tự ưu tiên):
+- Tin nhắn xã giao / phản hồi ngoài lề (cảm ơn, ừ/ok, haha, lời chào, câu hỏi
+  chung không phải thông tin chuyến đi) → "direct", KỂ CẢ khi đang giữa một trip
+  chưa xong. Đừng hỏi lại thông tin khi user chỉ đang phản hồi xã giao — hãy đáp
+  lời họ rồi nhẹ nhàng nhắc tiếp chuyến đi nếu hợp (vd "Không có gì! Khi nào rảnh
+  thì mình lên lịch Núi Bà Đen nhé 😊").
+- Tin nhắn không liên quan du lịch → "direct".
+- Muốn đi du lịch nhưng chưa có điểm đến → "clarify" (đưa gợi ý loại điểm đến).
+- Có điểm đến nhưng chưa có/không suy ra được thời gian → "clarify" (gợi ý options:
+  cuối tuần 2N1Đ, 3N2Đ, hay chuyến dài 5N4Đ?).
+- Đã đủ destination + time (hoặc suy ra được từ ngữ cảnh) → "plan".
+- Follow-up thu hẹp ("chỉ đổi khách sạn") → "plan" với steps chỉ chứa agent liên quan.
+- KHÔNG bao giờ hỏi lại thông tin đã có ở lượt trước.
 
-ĐA LƯỢT (FOLLOW-UP) — QUAN TRỌNG:
-- Bạn thấy TOÀN BỘ lịch sử hội thoại, không chỉ tin nhắn cuối. Phân tích theo ngữ cảnh.
-- Tin nhắn cuối có thể là follow-up tham chiếu lượt trước, ví dụ:
-  "thêm 1 ngày nữa", "đổi khách sạn rẻ hơn", "đi thêm Phú Quốc", "vậy còn chi phí?",
-  "giảm xuống 3 ngày", "nhóm thêm 2 người".
-- Khi đó: TripRequest phải phản ánh chuyến đi SAU KHI ÁP DỤNG thay đổi của lượt này
-  (gộp intent mới vào TripRequest ngụ ý từ hội thoại trước), KHÔNG phải chỉ tin nhắn cuối.
-  Ví dụ: lượt trước "Đà Nẵng 3 ngày", lượt này "thêm 1 ngày" → time_preference="4 ngày",
-  destination="Đà Nẵng".
-- steps chỉ chứa những agent user MUỐN CHẠY LƯỢT NÀY. Follow-up thu hẹp
-  ("chỉ đổi khách sạn") → ["recommendation"] (không chạy lại itinerary/cost).
-- Follow-up yêu cầu cả lịch trình lẫn gợi ý → đặt lại các agent liên quan vào steps.
-- Nếu follow-up thiếu thông tin đã có ở lượt trước (destination/time), KHÔNG hỏi lại;
-  dùng ngữ cảnh hội thoại để resolve.
+Quy tắc steps (khi action="plan"):
+- Thứ tự: "itinerary", "recommendation", "cost". cost LUÔN cuối (cần dữ liệu trước).
+- Không lặp agent. steps=[itinerary, recommendation, cost] cho plan đầy đủ.
+- Chỉ một việc → vd ["recommendation"].
 """
 
 
 class SupervisorDecision(BaseModel):
-    """Supervisor output: the parsed request + the ordered agents to run."""
+    """Supervisor output: routing action + resolved trip request + ordered agents."""
 
     model_config = ConfigDict(extra="forbid")
 
+    action: AgentAction = Field(
+        description=(
+            'Quyết định lượt này: "plan" (chạy agents theo steps), "clarify" '
+            '(hỏi thêm thông tin còn thiếu, tự nhiên), hoặc "direct" (trả lời '
+            "trực tiếp, không cần agent)."
+        ),
+    )
     trip_request: TripRequest
     steps: list[AgentStep] = Field(
         default_factory=list,
         description=(
-            'Agent cần chạy theo thứ tự: "itinerary", "recommendation", "cost". '
-            "cost phải nằm cuối. Rỗng nếu tin nhắn không liên quan du lịch."
+            'Agent cần chạy theo thứ tự (chỉ khi action="plan"): "itinerary", '
+            '"recommendation", "cost". cost phải nằm cuối. Rỗng cho clarify/direct.'
         ),
     )
 
 
 def supervisor(state: TravelState) -> dict:
-    """Parse the conversation into a TripRequest and an agent plan.
+    """Route the turn from the full conversation context.
 
-    Reads the full message history so follow-ups resolve against prior turns.
-    Also resets the per-turn ephemeral fields (errors, plan, step_index, and any
-    domain results not recomputed this turn). Without these resets the
-    checkpointer would carry last turn's failures and partial domain output into
-    the next answer, polluting it with stale data.
+    Reads the whole message history so follow-ups resolve against prior turns
+    (the supervisor is the single decision-maker: it decides plan/clarify/direct,
+    not a downstream field check). Also resets the per-turn ephemeral fields so
+    the checkpointer can't carry last turn's failures and partial domain output
+    into the next answer.
     """
-    # Full conversation history — the supervisor must see prior turns to resolve
-    # follow-ups ("thêm 1 ngày nữa", "đổi KS rẻ hơn") against the established
-    # trip context, not just the latest message in isolation.
     messages = state["messages"]
-    # Per-turn reset: these are ephemeral to the current turn. The checkpointer
-    # persists the whole TravelState between turns, so leaving them set would
-    # leak the previous turn's plan, errors, and partial domain results.
     reset: dict = {
         "errors": [],
         "step_index": 0,
-        # Domain fields: blank any result this turn won't recompute, so a
-        # narrowed follow-up (e.g. "only suggest hotels") never shows a stale
-        # itinerary/cost from the previous turn.
         "itinerary": {},
         "recommendations": {},
         "cost_report": {},
@@ -102,9 +99,17 @@ def supervisor(state: TravelState) -> dict:
             [SystemMessage(_SYSTEM_PROMPT), *messages],
         )
     except Exception as exc:  # noqa: BLE001 — degrade gracefully, never crash the graph
-        return {**reset, "plan": [], "errors": [error_label("supervisor", exc)]}
+        # No usable decision: route to a direct (apology) reply. Synthesis treats
+        # a missing trip_request + supervisor error as the degraded fallback.
+        return {
+            **reset,
+            "action": "direct",
+            "plan": [],
+            "errors": [error_label("supervisor", exc)],
+        }
     return {
         **reset,
+        "action": decision.action,
         "trip_request": decision.trip_request.model_dump(),
         "plan": list(decision.steps),
     }

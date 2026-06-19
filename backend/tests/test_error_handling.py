@@ -93,18 +93,22 @@ def test_supervisor_node_records_error(monkeypatch) -> None:
     state: TravelState = {"messages": [HumanMessage(content="hi")]}
     out = supervisor_module.supervisor(state)
     assert "trip_request" not in out
+    # Supervisor failure degrades to a direct (apology) reply, not a crash.
+    assert out["action"] == "direct"
     assert out["plan"] == []
     assert out["errors"] and out["errors"][0].startswith("supervisor:")
 
 
 def test_supervisor_node_emits_plan(monkeypatch) -> None:
     decision = SupervisorDecision(
+        action="plan",
         trip_request=TripRequest(destination="Đà Nẵng"),
         steps=["itinerary", "cost"],
     )
     monkeypatch.setattr(supervisor_module, "invoke_structured", lambda *a, **k: decision)
     state: TravelState = {"messages": [HumanMessage(content="Đà Nẵng 5 ngày")]}
     out = supervisor_module.supervisor(state)
+    assert out["action"] == "plan"
     assert out["plan"] == ["itinerary", "cost"]
     assert out["step_index"] == 0
     assert out["trip_request"]["destination"] == "Đà Nẵng"
@@ -149,6 +153,7 @@ def test_graph_runs_ordered_plan_and_skips_unscheduled(monkeypatch) -> None:
         supervisor_module,
         "invoke_structured",
         lambda *a, **k: SupervisorDecision(
+            action="plan",
             trip_request=TripRequest(destination="Đà Nẵng", time_preference="5 ngày"),
             steps=["itinerary", "cost"],
         ),
@@ -192,26 +197,62 @@ def test_graph_runs_ordered_plan_and_skips_unscheduled(monkeypatch) -> None:
     assert result.get("final_answer") == "tóm tắt"
 
 
-def test_synthesize_asks_for_missing_required_fields() -> None:
+def test_synthesize_clarify_uses_llm_and_names_missing_required(monkeypatch) -> None:
+    # Clarify is now driven by the supervisor's `action="clarify"` decision; this
+    # test checks synthesis WRITES the prose correctly once told to clarify.
+    captured: dict = {}
+
+    class _FakeLLM:
+        def invoke(self, messages):
+            captured["prompt"] = messages[0].content
+            return SimpleNamespace(content="Bạn dự định đi Đà Nẵng mấy ngày để mình lên lịch?")
+
+    monkeypatch.setattr(synthesis_module, "get_llm", lambda: _FakeLLM())
     synthesize = synthesis_module.synthesize
 
-    def answer(trip: TripRequest) -> str:
-        return synthesize({"trip_request": trip.model_dump(), "messages": []})["final_answer"]
+    # action=clarify, destination present, time missing -> prompt names time +
+    # surfaces the known destination; output is the LLM's natural reply.
+    text = synthesize({
+        "action": "clarify",
+        "trip_request": TripRequest(destination="Đà Nẵng").model_dump(),
+        "messages": [],
+    })["final_answer"]
 
-    # destination present, time missing -> clarify lists time + optional fields,
-    # and asks whether the user wants to add more (comprehensive first-time prompt).
-    text = answer(TripRequest(destination="Đà Nẵng")).lower()
-    assert "thời gian" in text
-    assert "tùy chọn" in text  # optional fields surfaced even when only required missing
-    assert "bổ sung" in text
+    assert text == "Bạn dự định đi Đà Nẵng mấy ngày để mình lên lịch?"
+    prompt = captured["prompt"].lower()
+    assert "thời gian" in prompt  # missing required field named
+    assert "Đà Nẵng" in captured["prompt"]  # known context surfaced
+    assert "bắt buộc" not in text.lower() and "tùy chọn" not in text.lower()
 
-    # time present, destination missing -> clarify lists destination + optional.
-    text = answer(TripRequest(time_preference="5 ngày")).lower()
-    assert "điểm đến" in text
+    # action=clarify, time present, destination missing -> prompt names destination.
+    synthesize({
+        "action": "clarify",
+        "trip_request": TripRequest(time_preference="5 ngày").model_dump(),
+        "messages": [],
+    })
+    assert "điểm đến" in captured["prompt"].lower()
 
-    # both required missing but a travel field present (companions) -> list both.
-    text = answer(TripRequest(companions="2 người")).lower()
-    assert "điểm đến" in text
-    assert "thời gian" in text
-    # companions is provided, so it must NOT be re-asked as missing.
-    assert "số người" not in text
+    # companions provided -> surfaced as known, not re-asked.
+    synthesize({
+        "action": "clarify",
+        "trip_request": TripRequest(companions="2 người").model_dump(),
+        "messages": [],
+    })
+    assert "2 người" in captured["prompt"]
+
+
+def test_synthesize_clarify_falls_back_when_llm_fails(monkeypatch) -> None:
+    # LLM failure must never leave the user without a question.
+    class _Boom:
+        def invoke(self, _messages):
+            raise RuntimeError("llm down")
+
+    monkeypatch.setattr(synthesis_module, "get_llm", lambda: _Boom())
+    synthesize = synthesis_module.synthesize
+    text = synthesize({
+        "action": "clarify",
+        "trip_request": TripRequest(destination="Đà Nẵng").model_dump(),
+        "messages": [],
+    })["final_answer"]
+    # Fallback still asks about the missing required field (time).
+    assert "thời gian" in text.lower()

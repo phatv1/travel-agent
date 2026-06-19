@@ -22,6 +22,11 @@ type CostReportState = dict[str, Any]
 # Agent node names the supervisor may schedule this turn. Drives _next_step routing.
 type AgentStep = Literal["itinerary", "recommendation", "cost"]
 
+# Supervisor's routing decision this turn. Drives synthesis dispatch — the
+# supervisor (which sees the full conversation) decides what to do, not a
+# hard-coded field-presence check.
+type AgentAction = Literal["plan", "clarify", "direct"]
+
 
 class InputState(TypedDict):
     """External graph input. Callers only need to provide messages."""
@@ -60,8 +65,10 @@ class TravelState(InputState, OutputState, total=False):
 
     trip_request: TripRequestState
 
-    # Supervisor routing: ordered agents to run this turn + a cursor. _next_step
-    # dispatches by plan[step_index]; an empty plan (off-topic chat, or a
-    # supervisor failure) routes straight to synthesize.
+    # Supervisor routing: the action this turn (plan/clarify/direct) + the
+    # ordered agents to run + a cursor. _next_step dispatches by plan[step_index];
+    # an empty plan (clarify/direct, or a supervisor failure) routes straight to
+    # synthesize, which then dispatches on `action`.
+    action: AgentAction
     plan: list[AgentStep]
     step_index: int

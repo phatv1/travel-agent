@@ -111,6 +111,12 @@ def _tool_results_as_text(messages: list) -> str:
 def itinerary(state: TravelState) -> dict:
     """Build a day-by-day itinerary: gather+filter attractions, then schedule them."""
     trip_request = TripRequest.model_validate(state.get("trip_request") or {})
+    # Graceful guard: the supervisor is trusted to send valid requests, but a
+    # missing destination would leak "Điểm đến: None" into the prompts. Skip
+    # with a soft error rather than producing garbage.
+    if not trip_request.destination:
+        errs = (state.get("errors") or []) + ["itinerary: thiếu điểm đến"]
+        return {"itinerary": {}, "errors": errs}
     context = {"trip_request": trip_request.model_dump()}
 
     try:
