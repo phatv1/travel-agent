@@ -25,7 +25,11 @@ type AgentStep = Literal["itinerary", "recommendation", "cost"]
 # Supervisor's routing decision this turn. Drives synthesis dispatch — the
 # supervisor (which sees the full conversation) decides what to do, not a
 # hard-coded field-presence check.
-type AgentAction = Literal["plan", "clarify", "direct"]
+#   plan    — within the 3 capabilities (run agents)
+#   clarify — wants to travel but missing core context
+#   refuse  — outside the 3 capabilities, OR unsafe/adversarial
+#   direct  — social / off-travel chat
+type AgentAction = Literal["plan", "clarify", "direct", "refuse"]
 
 
 class InputState(TypedDict):

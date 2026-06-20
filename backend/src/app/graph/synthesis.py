@@ -8,6 +8,7 @@ import json
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
+from app.agents.supervisor import CAPABILITIES
 from app.llms.factory import get_llm
 from app.schemas.state import TravelState
 
@@ -143,11 +144,61 @@ def _summarize(state: TravelState) -> str:
     return text
 
 
+def _refuse_message(state: TravelState) -> str:
+    """Honest refusal: name what the bot cannot do and steer to what it can.
+
+    Two shapes:
+      - Crisis / self-harm signal → a short, caring redirect to help (never a
+        cheerful plan). Handled first because duty-of-care outroutes capability.
+      - Otherwise (out-of-scope request, prompt injection, harmful content) → an
+        LLM reply grounded in the capability list: states the limit plainly and
+        suggests the nearest in-scope thing, so the user is never just blocked.
+    Falls back to a deterministic template if the LLM call fails.
+    """
+    messages = state.get("messages") or []
+    raw = messages[-1].content if messages else ""
+    # content may be a list of blocks (multimodal providers); coerce to text.
+    user_text = str(raw).lower() if not isinstance(raw, str) else raw.lower()
+    crisis_words = (
+        "không quay về", "không muốn sống", "tự xử", "tự vẫn", "kết thúc cuộc đời",
+        "kill myself", "suicide", "end it all", "không còn lý do",
+    )
+    if any(w in user_text for w in crisis_words):
+        return (
+            "Mình thấy dường như bạn đang ở một lúc rất khó khăn. Bạn không đơn độc — "
+            "hãy gọi 111 (Tổng đài Quốc gia Bảo vệ Trẻ em, miễn phí 24/7) hoặc nói "
+            "chia sẻ với người bạn tin. Mình luôn sẵn sàng tư vấn một chuyến đi nghỉ "
+            "ngơi khi bạn sẵn sàng. 💙"
+        )
+
+    caps = "; ".join(c["label"].lower() for c in CAPABILITIES)
+    prompt = (
+        f"Yêu cầu của user nằm NGOÀI 3 năng lực của mình ({caps}). "
+        "Hãy viết 1-3 câu tiếng Việt, thân thiện, nói THẬT mình không làm được "
+        "chuyện đó (KHÔNG bịa thông tin, KHÔNG hứa đặt chỗ/giá vé/thời tiết/visa), "
+        "rồi gợi ý ngắn 1 việc trong tầm mình có thể giúp. "
+        f"Tin nhắn user: {(messages[-1].content if messages else '')[:200]}"
+    )
+    try:
+        content = get_llm().invoke([HumanMessage(content=prompt)]).content
+        text = content if isinstance(content, str) else str(content)
+        if text.strip():
+            return text
+    except Exception:  # noqa: BLE001 — user always gets a refusal, LLM or not
+        pass
+    return (
+        "Xin lỗi, phần này nằm ngoài 3 việc mình làm được (lập lịch trình, gợi ý "
+        "lưu trú & ăn uống, ước chi phí). Bạn cho mình biết điểm đến và thời gian, "
+        "mình sẽ tư vấn kế hoạch chi tiết nhé!"
+    )
+
+
 def synthesize(state: TravelState) -> dict:
     """Compose the final answer, dispatched on the supervisor's action.
 
     - plan      → summarize agent outputs (fall back to direct if none ran)
     - clarify   → ask for the missing info naturally, with concrete suggestions
+    - refuse    → honest refusal naming the limit (duty-of-care for crisis signals)
     - direct    → answer conversationally
 
     The answer is returned both as ``final_answer`` (API/trace) and appended to
@@ -164,6 +215,8 @@ def synthesize(state: TravelState) -> dict:
         text = _SUPERVISOR_FAILED_MESSAGE
     elif action == "clarify":
         text = _clarify_message(state)
+    elif action == "refuse":
+        text = _refuse_message(state)
     elif action == "direct":
         text = _direct_answer(state)
     else:
