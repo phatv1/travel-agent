@@ -39,7 +39,11 @@ BƯỚC 3 — Tính toán số học (DÙNG tool, không tự tính):
 - divide: tổng KS / số người (lấy companions từ trip_request).
 - add: cộng các khoản lại.
 
-BƯỚC 4 — check_budget_status: khi có tổng VÀ budget, gọi tool đánh giá.
+BƯỚC 4 — Quy đổi ngoại tệ (NẾU CẦN):
+- convert_currency: dùng khi user hỏi về chi phí bằng ngoại tệ hoặc khi bạn muốn cung cấp thêm góc nhìn
+  (USD/EUR) cho user quốc tế.
+
+BƯỚC 5 — check_budget_status: khi có tổng VÀ budget, gọi tool đánh giá.
 Gọi đủ tool rồi thì dừng (không cần trả lời thêm).
 """
 
@@ -116,6 +120,7 @@ def cost(state: TravelState) -> dict:
     from app.tools.cost import (
         add,
         check_budget_status,
+        convert_currency,
         divide,
         multiply,
         search_price,
@@ -132,6 +137,7 @@ def cost(state: TravelState) -> dict:
             multiply,
             divide,
             check_budget_status,
+            convert_currency,
         ]
         gathered = gather_via_tools(llm, tools, _gather_messages(context))
 

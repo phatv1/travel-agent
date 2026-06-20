@@ -8,9 +8,12 @@ agentic loop, while the final values never depend on LLM arithmetic.
 
 import re
 
+import requests
 from langchain_core.tools import tool
 
-_VND_PER_USD = 25_000  # conservative fixed rate; cost agent deals in VND only
+# Conservative fixed rate used only to parse free-text USD amounts into VND
+# (e.g. "100 USD" budget). Live currency conversion is done by convert_currency.
+_VND_PER_USD = 25_000
 
 # Recognized Vietnamese/English amount units, normalized for matching.
 _UNIT_MULTIPLIERS = {
@@ -62,18 +65,6 @@ def check_budget_status_impl(total_vnd: int, budget_vnd: int) -> str:
 
 
 @tool
-def compute_trip_total(day_costs_vnd: list[int]) -> str:
-    """Tính tổng chi phí (VND) từ danh sách chi phí mỗi ngày.
-
-    Args:
-        day_costs_vnd: Danh sách chi phí từng ngày (VND, mỗi người).
-
-    Trả về tổng số VND. Dùng khi cần tính tổng chi phí chuyến đi.
-    """
-    return str(sum(day_costs_vnd))
-
-
-@tool
 def check_budget_status(total_vnd: int, budget_vnd: int) -> str:
     """So sánh tổng chi phí với ngân sách (đều là số VND).
 
@@ -85,23 +76,6 @@ def check_budget_status(total_vnd: int, budget_vnd: int) -> str:
     Dùng để đánh giá chính xác xem chuyến đi có vượt ngân sách không.
     """
     return check_budget_status_impl(total_vnd, budget_vnd)
-
-
-@tool
-def convert_currency(amount_vnd: int, target_currency: str) -> str:
-    """Quy đổi từ VND sang USD hoặc EUR.
-
-    Args:
-        amount_vnd: Số tiền VND.
-        target_currency: "USD" hoặc "EUR".
-
-    Trả về chuỗi dạng "X USD" / "X EUR". Dùng khi user hỏi quy đổi tiền tệ.
-    """
-    cur = target_currency.upper().strip()
-    rate = _VND_PER_USD if cur == "USD" else _VND_PER_USD * 1 if cur == "EUR" else None
-    if rate is None:
-        return f"không hỗ trợ {target_currency}"
-    return f"{round(amount_vnd / rate)} {cur}"
 
 
 @tool
@@ -159,3 +133,38 @@ def search_price(query: str) -> str:
         return json.dumps(
             {"query": query, "results": [], "error": str(exc)[:120]}, ensure_ascii=False
         )
+
+
+@tool
+def convert_currency(amount_vnd: int, target_currency: str) -> str:
+    """Quy đổi số tiền VND sang USD, EUR, ... theo tỷ giá THẬT (mới nhất).
+
+    Args:
+        amount_vnd: Số tiền VND.
+        target_currency: Mã tiền tệ đích, ví dụ "USD", "EUR", "JPY".
+
+    Dùng khi cần trình bày chi phí bằng ngoại tệ để user dễ hình dung
+    (đặc biệt user quốc tế). Lấy tỷ giá live từ open.er-api.com (miễn phí,
+    không cần key).
+    """
+    target = target_currency.upper().strip()
+    if amount_vnd < 0:
+        return "lỗi: số tiền âm"
+    try:
+        resp = requests.get(
+            f"https://open.er-api.com/v6/latest/VND", timeout=10
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.RequestException as exc:
+        return f"lỗi mạng: không lấy được tỷ giá ({exc})"
+    if data.get("result") != "success":
+        return f"lỗi API tỷ giá: {data.get('error-type', 'không rõ')}"
+    rate = data.get("rates", {}).get(target)
+    if rate is None:
+        return f"không hỗ trợ mã tiền tệ '{target_currency}'"
+    converted = round(amount_vnd * rate)
+    return (
+        f"{amount_vnd:,} VND = {converted:,} {target} "
+        f"(1 VND ≈ {rate:.6f} {target}, cập nhật {data.get('time_last_update_utc', 'N/A')})"
+    )

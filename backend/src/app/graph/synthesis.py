@@ -14,7 +14,10 @@ from app.schemas.state import TravelState
 
 _SYSTEM_PROMPT = """\
 Bạn là trợ lý tư vấn du lịch.
-Nhiệm vụ: từ kết quả structured (JSON), viết câu trả lời cuối thân thiện bằng tiếng Việt.
+Nhiệm vụ: từ kết quả structured (JSON), viết câu trả lời cuối thân thiện.
+
+NGÔN NGỮ — QUAN TRỌNG: phản hồi bằng ĐÚNG ngôn ngữ user đang dùng trong tin nhắn
+(tiếng Việt → tiếng Việt, English → English, khác → theo user). Không ép ngôn ngữ.
 
 Quy tắc:
 - Tổng hợp lịch trình, gợi ý (khách sạn/quán ăn) và chi phí thành một câu trả lời mạch lạc.
@@ -60,6 +63,9 @@ _CLARIFY_PROMPT = """\
 Bạn là trợ lý tư vấn du lịch, nói chuyện tự nhiên, thân thiện như một tư vấn
 viên thực — KHÔNG như một form.
 
+NGÔN NGỮ — QUAN TRỌNG: phản hồi bằng ĐÚNG ngôn ngữ user đang dùng (tiếng Việt →
+tiếng Việt, English → English, khác → theo user). Không ép ngôn ngữ.
+
 Nhiệm vụ: viết một câu phản hồi NGẮN để hỏi thêm thông tin cần thiết
 cho việc lên kế hoạch. Phải ĐƯA GỢI Ý cụ thể để user dễ trả lời.
 
@@ -80,7 +86,7 @@ Quy tắc:
   Vd điểm đến: "Bạn thích biển (Đà Nẵng, Phú Quốc), núi (Đà Lạt, Sapa),
   hay phố cổ (Hội An)?"
 - Ưu tiên hỏi 1-2 thứ quan trọng nhất trước, đừng hỏi dồn dập tất cả cùng lúc.
-- Tiếng Việt, có thể thêm 1 emoji nhẹ.
+- Có thể thêm 1 emoji nhẹ.
 """
 
 
@@ -108,9 +114,19 @@ def _clarify_message(state: TravelState) -> str:
 
 _DIRECT_PROMPT = """\
 Bạn là trợ lý tư vấn du lịch.
-Trả lời trực tiếp, thân thiện bằng tiếng Việt cho tin nhắn không cần lập kế hoạch
-(chào hỏi, hỏi chung, cảm ơn, trò chuyện). Ngắn gọn, tự nhiên. Nếu user có vẻ muốn
-lên kế hoạch thì gợi ý họ nêu rõ điểm đến, số ngày và số người.
+
+NGÔN NGỮ — QUAN TRỌNG: phản hồi bằng ĐÚNG ngôn ngữ user đang dùng (tiếng Việt →
+tiếng Việt, English → English, khác → theo user). Không ép ngôn ngữ.
+
+Trả lời trực tiếp, thân thiện cho tin nhắn không cần lập kế hoạch
+(chào hỏi, hỏi chung, cảm ơn, trò chuyện). Ngắn gọn, tự nhiên.
+
+Nếu user hỏi bạn là ai / làm được gì (who are you / what can you do): KHÔNG xưng
+tên model hay nhà phát triển — hãy giới thiệu ngắn gọn 3 năng lực của bạn
+(lập lịch trình theo ngày, gợi ý lưu trú & ăn uống, ước chi phí) và mời user
+nêu điểm đến + thời gian để bắt đầu.
+
+Nếu user có vẻ muốn lên kế hoạch thì gợi ý họ nêu rõ điểm đến, số ngày và số người.
 """
 
 
@@ -164,19 +180,28 @@ def _refuse_message(state: TravelState) -> str:
         "kill myself", "suicide", "end it all", "không còn lý do",
     )
     if any(w in user_text for w in crisis_words):
+        # Duty-of-care redirect. Multilingual because crisis detection is
+        # keyword-only (we can't tell the user's language reliably before the LLM
+        # call, and getting this right matters more than being terse). 111 is
+        # Vietnam's national child-protection hotline.
         return (
             "Mình thấy dường như bạn đang ở một lúc rất khó khăn. Bạn không đơn độc — "
             "hãy gọi 111 (Tổng đài Quốc gia Bảo vệ Trẻ em, miễn phí 24/7) hoặc nói "
             "chia sẻ với người bạn tin. Mình luôn sẵn sàng tư vấn một chuyến đi nghỉ "
-            "ngơi khi bạn sẵn sàng. 💙"
+            "ngơi khi bạn sẵn sàng. 💙\n\n"
+            "It sounds like you're going through a really hard time. You're not alone "
+            "— please reach out to someone you trust, or a local crisis line. I'm "
+            "always here to help plan a restful trip whenever you're ready. 💙"
         )
 
     caps = "; ".join(c["label"].lower() for c in CAPABILITIES)
     prompt = (
         f"Yêu cầu của user nằm NGOÀI 3 năng lực của mình ({caps}). "
-        "Hãy viết 1-3 câu tiếng Việt, thân thiện, nói THẬT mình không làm được "
+        "Hãy viết 1-3 câu thân thiện, nói THẬT mình không làm được "
         "chuyện đó (KHÔNG bịa thông tin, KHÔNG hứa đặt chỗ/giá vé/thời tiết/visa), "
         "rồi gợi ý ngắn 1 việc trong tầm mình có thể giúp. "
+        "NGÔN NGỮ: phản hồi bằng ĐÚNG ngôn ngữ user đang dùng (tiếng Việt → tiếng Việt, "
+        "English → English, khác → theo user). "
         f"Tin nhắn user: {(messages[-1].content if messages else '')[:200]}"
     )
     try:
@@ -189,7 +214,10 @@ def _refuse_message(state: TravelState) -> str:
     return (
         "Xin lỗi, phần này nằm ngoài 3 việc mình làm được (lập lịch trình, gợi ý "
         "lưu trú & ăn uống, ước chi phí). Bạn cho mình biết điểm đến và thời gian, "
-        "mình sẽ tư vấn kế hoạch chi tiết nhé!"
+        "mình sẽ tư vấn kế hoạch chi tiết nhé!\n\n"
+        "Sorry, that's outside the three things I can do (plan itineraries, suggest "
+        "stays & dining, estimate costs). Tell me your destination and dates, and "
+        "I'll put together a detailed plan!"
     )
 
 
